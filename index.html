@@ -225,8 +225,8 @@
         <input type="range" id="dust" min="0.5" max="4" step="0.1" value="1">
       </div>
       <div class="slider">
-        <div class="lab"><span>Drop size</span><output id="dropout">1.5</output></div>
-        <input type="range" id="drop" min="0.6" max="2.4" step="0.05" value="1.5">
+        <div class="lab"><span>Drop size</span><output id="dropout">1.2</output></div>
+        <input type="range" id="drop" min="0.6" max="2.4" step="0.05" value="1.2">
       </div>
       <div class="slider">
         <div class="lab"><span>Mist</span><output id="mistout">1</output></div>
@@ -3434,7 +3434,7 @@ fn mainFragment(
   let dustDial = 1.0;
   // The water dials: drop size scales every rain stamp AND the optical
   // warp under the beads; mist multiplies the scene's own fog.
-  let dropDial = 1.5;
+  let dropDial = 1.2;
   let mistDial = 1.0;
   function hexTriple(hex) {
     return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16),
@@ -3968,6 +3968,15 @@ fn mainFragment(
   const rainAdd = new PIXI.Container();
   rainAdd.blendMode = 'add';
   lightScene.addChild(rainAdd);
+  // The glass layer's own lanes: its sprites are PERSISTENT (a droplet
+  // owns its sprites for life), so they must not live where the
+  // per-frame pool hide-loops sweep.
+  const paneDim = new PIXI.Container();
+  paneDim.blendMode = 'multiply';
+  lightScene.addChild(paneDim);
+  const paneAdd = new PIXI.Container();
+  paneAdd.blendMode = 'add';
+  lightScene.addChild(paneAdd);
   // Mist rides over the rain but under the strike quad.
   const fogBank = new PIXI.Container();
   fogBank.blendMode = 'add';
@@ -4046,7 +4055,7 @@ fn mainFragment(
   // The lens map: a neutral-gray wall with a lens sprite per settled
   // bead, rendered to its own texture each wet frame; one displacement
   // filter over the WORLD bends print, cast and light alike through it.
-  const LENS_RES = 1536;
+  const LENS_RES = 1024;
   const lensRT = PIXI.RenderTexture.create({ width: LENS_RES, height: LENS_RES });
   const lensScene = new PIXI.Container();
   lensScene.scale.set(LENS_RES / WALL);
@@ -4055,6 +4064,8 @@ fn mainFragment(
   lensScene.addChild(lensBase);
   const lensInk = new PIXI.Container();
   lensScene.addChild(lensInk);
+  const paneLensInk = new PIXI.Container();
+  lensScene.addChild(paneLensInk);
   const lenses = rainPool(lensInk, lensSets[2][3]);
   const lensMapSprite = new PIXI.Sprite(lensRT);
   lensMapSprite.width = WALL; lensMapSprite.height = WALL;
@@ -4114,20 +4125,97 @@ fn mainFragment(
   // impacts feed the field; a dry spell evaporates it.
   const pane = { drops: [], salt: 1, grid: new Map() };
   const PANE_CELL = 48;
+  // Persistent sprites: rewriting thousands of pooled sprites per
+  // frame was the fps cliff, and condensation does not move — nothing
+  // static should cost per-frame work. A droplet owns its sprites;
+  // sliders, mergers and settling drops sync every frame, everything
+  // else only when its radius drifts. Freelists absorb the churn.
+  const paneFree = { add: [], dim: [], lens: [] };
+  function paneAcquire(lane, host, tex) {
+    const s = paneFree[lane].pop() || new PIXI.Sprite(tex);
+    s.texture = tex;
+    s.anchor.set(0.5, 0.5);
+    s.visible = true;
+    if (s.parent !== host) host.addChild(s);
+    return s;
+  }
+  function paneDropSprite(d, key, lane) {
+    if (!d[key]) return;
+    d[key].visible = false;
+    paneFree[lane].push(d[key]);
+    d[key] = null;
+  }
+  function paneRelease(d) {
+    paneDropSprite(d, 'sb', 'add');
+    paneDropSprite(d, 'sd', 'dim');
+    paneDropSprite(d, 'sl', 'lens');
+    paneDropSprite(d, 'st', 'add');
+  }
+  function paneSync(d) {
+    const dial = dropDial;
+    const r = d.r;
+    const sagIdx = r < 6 * dial ? 0 : r < 11 * dial ? 1 : 2;
+    const set = beadSets[sagIdx];
+    const stretch = d.kind === 1 ? 1 + Math.min(0.4, d.vy * 0.0015) : 1;
+    const vis = Math.min(1, 0.36 + (r / (9 * dial)) * 0.72);
+    if (!d.sb) d.sb = paneAcquire('add', paneAdd, set.light);
+    d.sb.texture = set.light;
+    d.sb.position.set(d.x, d.y);
+    d.sb.width = r * 3.0;
+    d.sb.height = r * 3.0 * stretch;
+    d.sb.alpha = 0.9 * vis;
+    if (r > 3 * dial) {
+      if (!d.sd) d.sd = paneAcquire('dim', paneDim, set.dim);
+      d.sd.texture = set.dim;
+      d.sd.position.set(d.x, d.y);
+      d.sd.width = r * 3.0;
+      d.sd.height = r * 3.0 * stretch;
+      d.sd.alpha = 0.85 * vis;
+    } else {
+      paneDropSprite(d, 'sd', 'dim');
+    }
+    if (r > 4 * dial) {
+      if (!d.sl) d.sl = paneAcquire('lens', paneLensInk, pendantLens);
+      d.sl.texture = lensSets[sagIdx][
+        r < 8.5 ? 0 : r < 12 ? 1 : r < 15.5 ? 2 : 3];
+      d.sl.position.set(d.x, d.y);
+      d.sl.width = r * 2.85;
+      d.sl.height = r * 2.85 * stretch;
+    } else {
+      paneDropSprite(d, 'sl', 'lens');
+    }
+    if (d.kind === 1 && d.vy > 4) {
+      if (!d.st) d.st = paneAcquire('add', paneAdd, streakTex);
+      d.st.texture = streakTex;
+      d.st.anchor.set(0.5, 1);
+      d.st.position.set(d.x, d.y - r * 0.6);
+      d.st.height = r * 2.6;
+      d.st.width = r * 0.8;
+      d.st.alpha = 0.12;
+    } else {
+      paneDropSprite(d, 'st', 'add');
+    }
+    d.syncedR = r;
+  }
   function paneSpawn(x, y, r, kind) {
     pane.salt = (pane.salt + 0x9e37) >>> 0;
+    // Born at 45% and settling toward full size — water gathers, it
+    // does not pop into existence.
     const d = {
-      x, y, r, vy: 0, kind, salt: pane.salt, trailAt: 0,
+      x, y, r: r * 0.45, rT: r, vy: 0, kind, salt: pane.salt,
+      trailAt: 0, into: null, syncedR: 0,
+      sb: null, sd: null, sl: null, st: null,
       wig: hashed(RAIN_SEED, pane.salt, 4) * 6.283,
     };
     pane.drops.push(d);
+    paneSync(d);
     return d;
   }
   function stepPane(dt) {
     const dial = dropDial;
     const crit = 8 * dial;
     const want = targetCount > 0
-      ? Math.min(2000, Math.round(420 + targetCount * 2)) : 0;
+      ? Math.min(1300, Math.round(380 + targetCount * 1.6)) : 0;
     // Condensation gathers a few droplets per frame; one in twenty is
     // born heavy so the first sliders move within seconds.
     let born = Math.min(8, want - pane.drops.length);
@@ -4148,20 +4236,49 @@ fn mainFragment(
       if (!list) { list = []; pane.grid.set(key, list); }
       list.push(i);
     }
-    const dead = new Set();
     for (let i = 0; i < pane.drops.length; i++) {
       const d = pane.drops[i];
-      if (dead.has(i)) continue;
+      if (d.kind === 3) {
+        // MERGING: coalescence is a flow, never a deletion. The bridge
+        // pulls the small drop into the slider while its volume drains
+        // across continuously — the slider swells exactly as fast as
+        // the small drop shrinks, and the eye sees one water.
+        const s = d.into;
+        if (!s || s.r < 0.7) { d.kind = 0; d.into = null; continue; }
+        const pull = Math.min(1, dt / 0.09);
+        d.x += (s.x - d.x) * pull;
+        d.y += (s.y - d.y) * pull;
+        const drain = Math.min(d.r, d.r * dt / 0.12 + 0.3 * dt);
+        const moved = d.r ** 3 - (d.r - drain) ** 3;
+        d.r -= drain;
+        s.r = Math.min(30 * dial, Math.cbrt(s.r ** 3 + moved * 0.9));
+        const ddx = d.x - s.x, ddy = d.y - s.y;
+        if (d.r < 0.9 || ddx * ddx + ddy * ddy < s.r * s.r * 0.1) {
+          s.r = Math.min(30 * dial,
+                         Math.cbrt(s.r ** 3 + Math.max(0, d.r) ** 3 * 0.9));
+          d.r = 0; // the rebuild culls it
+        }
+        if (d.r > 0) paneSync(d); else paneRelease(d);
+        paneSync(s);
+        continue;
+      }
+      // A fresh droplet settles toward its born size first.
+      if (d.rT) {
+        d.r += (d.rT - d.r) * Math.min(1, dt * 9);
+        if (d.rT - d.r < 0.15) d.rT = 0;
+      }
       if (d.kind === 0) {
         // Condensation breathes in; past critical it becomes a slider.
-        d.r += dt * 0.2 * dial;
+        if (!d.rT) d.r += dt * 0.2 * dial;
         if (want === 0) d.r -= dt * 0.9 * dial;
         if (d.r > crit * (0.95 + 0.1 * hashed(RAIN_SEED, d.salt, 5))) {
           d.kind = 1;
         }
+        if (Math.abs(d.r - d.syncedR) > 0.25) paneSync(d);
       } else if (d.kind === 2) {
         // Trail droplets only evaporate — faster once the rain stops.
         d.r -= dt * 0.3 * dial * (want === 0 ? 3 : 1);
+        if (Math.abs(d.r - d.syncedR) > 0.25) paneSync(d);
       } else {
         // The slider: speed comes from mass in excess of friction's
         // hold. Shedding and swallowing move it around that line.
@@ -4179,8 +4296,12 @@ fn mainFragment(
             d.trailAt = 0;
             const tr = d.r
               * (0.2 + hashed(RAIN_SEED, (d.salt + 17) >>> 0, 8) * 0.13);
-            paneSpawn(d.x - Math.sin(d.wig) * d.r * 0.2,
-                      d.y - d.r * 0.9, tr, 2);
+            // Pinched off already formed — a trail droplet is torn
+            // from visible mass, not condensed from nothing.
+            const shed = paneSpawn(d.x - Math.sin(d.wig) * d.r * 0.2,
+                                   d.y - d.r * 0.9, tr, 2);
+            shed.r = tr;
+            shed.rT = 0;
             d.r = Math.cbrt(Math.max(1, d.r ** 3 - tr ** 3 * 0.8));
           }
           // Absorb everything in the swept path — smaller sliders
@@ -4193,28 +4314,32 @@ fn mainFragment(
               const list = pane.grid.get((cx + ox) * 4096 + (cy + oy));
               if (!list) continue;
               for (const oi of list) {
-                if (oi === i || dead.has(oi)) continue;
+                if (oi === i) continue;
                 const o = pane.drops[oi];
+                if (o.kind === 3) continue;
                 if (o.kind === 1 && o.r > d.r) continue;
                 const dx = o.x - d.x, dy = o.y - d.y;
                 const rr = reach + o.r * 0.6;
                 if (dx * dx + dy * dy < rr * rr) {
-                  d.r = Math.min(30 * dial,
-                                 Math.cbrt(d.r ** 3 + o.r ** 3 * 0.9));
-                  d.vy *= 0.82;
-                  dead.add(oi);
+                  // Capture only marks the bridge; the merging branch
+                  // drains the water across over the next ~100ms.
+                  o.kind = 3;
+                  o.into = d;
+                  o.vy = 0;
+                  d.vy *= 0.86;
                 }
               }
             }
           }
         }
+        if (d.vy > 1 || Math.abs(d.r - d.syncedR) > 0.25) paneSync(d);
       }
     }
-    if (dead.size || pane.drops.length) {
+    {
       const next = [];
       for (let i = 0; i < pane.drops.length; i++) {
         const d = pane.drops[i];
-        if (dead.has(i) || d.y > WALL + 40 || d.r < 0.7) continue;
+        if (d.y > WALL + 40 || d.r < 0.7) { paneRelease(d); continue; }
         next.push(d);
       }
       pane.drops = next;
@@ -4240,9 +4365,6 @@ fn mainFragment(
   }
 
   const RAIN_SEED = 0x5eed1717 >>> 0;
-  // shed 0.85: the dense frontal print has no drip tips — every paper
-  // lake's rim is a closed loop — so runs must bead off and fall on, or
-  // the whole population beads up on the canopy within seconds.
   // shed 2.2 / pool 1.6: a bead's life on the wall. The first cut shed
   // at 0.85s and every bead blinked — formed, vanished, re-formed a few
   // pixels lower — because the whole run fit inside a second. Water
@@ -4483,7 +4605,7 @@ fn mainFragment(
         if (splashes.length > 140) splashes.splice(0, splashes.length - 140);
         // The impact feeds the glass layer: surface water accumulates
         // where the rain actually lands.
-        if (pane.drops.length < 1800) {
+        if (pane.drops.length < 1400) {
           paneSpawn(d.x, d.y, (3.2 + (d.m ?? 1) * 2.2) * dropDial, 0);
         }
         if (d.band !== 0) continue;
@@ -4661,46 +4783,8 @@ fn mainFragment(
         }
       }
     }
-    // The glass layer: condensation as faint texture, sliders bright
-    // and stretched by their speed, dotted trails behind them. Small
-    // drops stay round (the sag classes already encode tension vs
-    // gravity); everything shares the bead/lens language.
-    for (const pd of pane.drops) {
-      const r = pd.r;
-      if (r < 1.1) continue;
-      const sagIdx = r < 6 * dropDial ? 0 : r < 11 * dropDial ? 1 : 2;
-      const set = beadSets[sagIdx];
-      const stretch = pd.kind === 1 ? 1 + Math.min(0.4, pd.vy * 0.0015) : 1;
-      const vis = Math.min(1, 0.36 + (r / (9 * dropDial)) * 0.72);
-      const dim = dims.at(dims.used++);
-      dim.texture = set.dim;
-      dim.position.set(pd.x, pd.y);
-      dim.width = r * 3.0;
-      dim.height = r * 3.0 * stretch;
-      dim.alpha = 0.85 * vis;
-      const body = beads.at(beads.used++);
-      body.texture = set.light;
-      body.position.set(pd.x, pd.y);
-      body.width = r * 3.0;
-      body.height = r * 3.0 * stretch;
-      body.alpha = 0.9 * vis;
-      if (r > 2.6 * dropDial) {
-        const lens = lenses.at(lenses.used++);
-        lens.texture = lensSets[sagIdx][
-          r < 8.5 ? 0 : r < 12 ? 1 : r < 15.5 ? 2 : 3];
-        lens.position.set(pd.x, pd.y);
-        lens.width = r * 2.85;
-        lens.height = r * 2.85 * stretch;
-      }
-      if (pd.kind === 1 && pd.vy > 4) {
-        const trail = trails.at(trails.used++);
-        trail.position.set(pd.x, pd.y - r * 0.6);
-        trail.rotation = 0;
-        trail.height = r * 2.6;
-        trail.width = r * 0.8;
-        trail.alpha = 0.12;
-      }
-    }
+    // (The glass layer draws itself: persistent sprites, synced only
+    // on change — see paneSync.)
     // Remnants and ghosts: any bead whose drop is no longer running
     // dries in place — shrinking, fading, its warp closing with it.
     const drawRemnant = (g) => {
@@ -5010,6 +5094,8 @@ fn mainFragment(
   dropIn.addEventListener('input', () => {
     dropDial = Number(dropIn.value);
     dropOut.textContent = dropIn.value;
+    // Persistent glass sprites bake the dial into their sizes.
+    for (const d of pane.drops) paneSync(d);
   });
   const mistIn = document.getElementById('mist');
   const mistOut = document.getElementById('mistout');
@@ -5078,6 +5164,8 @@ fn mainFragment(
     for (const btn of styleRow.querySelectorAll('button')) {
       btn.classList.toggle('on', btn.dataset.style === styleOverride);
     }
+    // Presets and scenes can move the drop dial under the glass layer.
+    for (const d of pane.drops) paneSync(d);
   }
   const SCENE_LABELS = {
     noon: 'Noon', golden_hour: 'Golden hour', autumn: 'Autumn',
