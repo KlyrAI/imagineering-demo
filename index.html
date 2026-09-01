@@ -280,13 +280,17 @@
         What you are pushing around are the print&rsquo;s own pixels.
       </p>
       <p class="note">
-        <b>Water bends light.</b> Every settled bead paints a radial lens
-        into a displacement map, and one filter over the composed wall
-        refracts the actual print through it &mdash; the pigment genuinely
-        warps under each drop, scaled by the <b>Drop size</b> dial. The
-        bead itself is drawn in projector terms: light added for the
-        specular and the gathered crescent, light withheld for the rim
-        and body shadow.
+        <b>Water bends light, and gravity bends water.</b> Every settled
+        bead paints a lens into a displacement map, and one filter over
+        the composed wall refracts the actual print through it &mdash;
+        the pigment genuinely warps under each drop, scaled by the
+        <b>Drop size</b> dial. No drop is a circle: mass sags each bead
+        into an egg (tension holds the small ones rounder), a drop
+        hanging at a leaf&rsquo;s rim necks into a pendant before it lets
+        go, and sliding drops jiggle and tow a wet wake. The bead itself
+        is drawn in projector terms: light added for the specular and
+        the gathered crescent, light withheld for the rim and body
+        shadow &mdash; and its lens wears the same sagged silhouette.
       </p>
     </div>
   </aside>
@@ -3785,55 +3789,89 @@ fn mainFragment(
     return PIXI.Texture.from(c);
   })();
 
-  // The settled bead, light half: dim glassy body, gathered light at
-  // the lower rim, one hard specular up-left with a tiny echo.
-  const beadTex = (() => {
-    const c = document.createElement('canvas');
-    c.width = 96; c.height = 96;
-    const ctx = c.getContext('2d');
-    let g = ctx.createRadialGradient(48, 48, 4, 48, 48, 42);
-    g.addColorStop(0, 'rgba(148,178,214,0.16)');
-    g.addColorStop(0.72, 'rgba(168,199,236,0.3)');
-    g.addColorStop(0.92, 'rgba(190,216,248,0.12)');
-    g.addColorStop(1, 'rgba(190,216,248,0)');
-    ctx.fillStyle = g; ctx.fillRect(0, 0, 96, 96);
-    g = ctx.createRadialGradient(48, 66, 2, 48, 66, 21);
-    g.addColorStop(0, 'rgba(236,246,255,0.9)');
-    g.addColorStop(0.55, 'rgba(214,235,255,0.34)');
-    g.addColorStop(1, 'rgba(214,235,255,0)');
-    ctx.fillStyle = g; ctx.fillRect(0, 0, 96, 96);
-    g = ctx.createRadialGradient(35, 34, 0, 35, 34, 9);
-    g.addColorStop(0, 'rgba(255,255,255,0.95)');
-    g.addColorStop(0.5, 'rgba(255,255,255,0.4)');
-    g.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = g; ctx.fillRect(0, 0, 96, 96);
-    g = ctx.createRadialGradient(58, 29, 0, 58, 29, 4);
-    g.addColorStop(0, 'rgba(255,255,255,0.7)');
-    g.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = g; ctx.fillRect(0, 0, 96, 96);
-    return PIXI.Texture.from(c);
-  })();
-
-  // The bead's shadow half, for the multiply lane: white is neutral,
-  // the body shades its wall a touch, the rim bites, and the crescent
-  // opposite the specular carries the volume.
-  const beadDimTex = (() => {
-    const c = document.createElement('canvas');
-    c.width = 96; c.height = 96;
-    const ctx = c.getContext('2d');
-    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 96, 96);
-    let g = ctx.createRadialGradient(48, 48, 6, 48, 48, 42);
-    g.addColorStop(0, 'rgba(126,146,172,0.2)');
-    g.addColorStop(0.78, 'rgba(126,146,172,0.28)');
-    g.addColorStop(0.92, 'rgba(88,108,136,0.5)');
-    g.addColorStop(1, 'rgba(88,108,136,0)');
-    ctx.fillStyle = g; ctx.fillRect(0, 0, 96, 96);
-    g = ctx.createRadialGradient(38, 37, 2, 38, 37, 20);
-    g.addColorStop(0, 'rgba(92,110,136,0.3)');
-    g.addColorStop(1, 'rgba(92,110,136,0)');
-    ctx.fillStyle = g; ctx.fillRect(0, 0, 96, 96);
-    return PIXI.Texture.from(c);
-  })();
+  // No drop on a wall is a circle. Gravity sags the pinned bead into an
+  // egg — tight over the top, bulged at the bottom — and the sag grows
+  // with mass (the Bond number: tension wins for small drops, gravity
+  // for big ones). A drop hanging at a lower rim necks into a pendant.
+  // One shape field carries all of it, and every texture — light body,
+  // multiply shadow, displacement lens — derives from the same field,
+  // so silhouette, shadow and warp always agree.
+  //
+  // dropField < 1 is inside. sag lengthens and widens the bottom while
+  // compressing the top; neck pinches the top width (the pendant).
+  function dropField(x, y, sag, neck) {
+    const stretch = y < 0 ? 1 - sag * 0.26 : 1 + sag * 0.4;
+    const yy = y / stretch;
+    const bulge = 1 + sag * 0.42 * Math.max(0, y);
+    const pinch = 1 - (neck || 0) * 0.55 * Math.max(0, -y);
+    const xx = x / (bulge * pinch);
+    return xx * xx + yy * yy;
+  }
+  // Texture pixels map to unit space [-1.5, 1.5] so the heaviest sag
+  // still fits; sprite sizes below carry the matching 3.0 factor.
+  const DROP_SPAN = 1.5;
+  function bakeDropPair(sag, neck) {
+    const n = 112;
+    const toUnit = (p) => ((p + 0.5) / n * 2 - 1) * DROP_SPAN;
+    const gauss = (x, y, cx, cy, sigma) => {
+      const dx = x - cx, dy = y - cy;
+      return Math.exp(-(dx * dx + dy * dy) / (2 * sigma * sigma));
+    };
+    const crY = 0.58 * (1 + sag * 0.4);
+    const light = document.createElement('canvas');
+    light.width = n; light.height = n;
+    const lctx = light.getContext('2d');
+    const limg = lctx.createImageData(n, n);
+    const dim = document.createElement('canvas');
+    dim.width = n; dim.height = n;
+    const dctx = dim.getContext('2d');
+    const dimg = dctx.createImageData(n, n);
+    for (let py = 0; py < n; py++) {
+      for (let px = 0; px < n; px++) {
+        const x = toUnit(px), y = toUnit(py);
+        const e = dropField(x, y, sag, neck);
+        const i = (py * n + px) * 4;
+        // Multiply texture is WHITE (neutral) outside the drop.
+        dimg.data[i] = 255; dimg.data[i + 1] = 255; dimg.data[i + 2] = 255;
+        dimg.data[i + 3] = 255;
+        if (e >= 1) { limg.data[i + 3] = 0; continue; }
+        const u = Math.sqrt(e);
+        const edge = Math.min(1, (1 - u) / 0.08);
+        // Light half: dim glassy body, the gathered crescent at the
+        // bottom bulge, a hard specular over the tight top curve.
+        const body = 0.16 + 0.14 * Math.min(1, u / 0.8)
+          + 0.1 * Math.max(0, (u - 0.62) / 0.3) * (y > 0 ? 1 : 0.4);
+        const crescent = 0.9 * gauss(x, y, 0, crY, 0.3);
+        const spec = 0.95 * gauss(x, y, -0.3, -0.42, 0.11)
+          + 0.6 * gauss(x, y, 0.24, -0.48, 0.055);
+        const lum = Math.min(1, body + crescent + spec);
+        const warmth = Math.min(1, crescent + spec);
+        limg.data[i] = Math.round(150 + 105 * warmth);
+        limg.data[i + 1] = Math.round(180 + 75 * warmth);
+        limg.data[i + 2] = Math.round(215 + 40 * warmth);
+        limg.data[i + 3] = Math.round(255 * lum * edge);
+        // Shadow half: the body shades (deeper water at the bulge),
+        // the rim bites everywhere but the bright bottom, and the
+        // crescent opposite the specular carries the volume.
+        const shade = 0.24 * Math.min(1, u / 0.85)
+          * (1 + 0.3 * Math.max(0, y) / DROP_SPAN);
+        const rim = 0.5 * Math.exp(-Math.pow((u - 0.93) / 0.055, 2))
+          * (1 - 0.55 * Math.max(0, y) / 1.3);
+        const opp = 0.26 * gauss(x, y, -0.26, -0.3, 0.32);
+        const dark = Math.min(0.75, (shade + rim + opp)) * edge;
+        dimg.data[i] = Math.round(255 - dark * (255 - 96));
+        dimg.data[i + 1] = Math.round(255 - dark * (255 - 116));
+        dimg.data[i + 2] = Math.round(255 - dark * (255 - 142));
+      }
+    }
+    lctx.putImageData(limg, 0, 0);
+    dctx.putImageData(dimg, 0, 0);
+    return { light: PIXI.Texture.from(light), dim: PIXI.Texture.from(dim) };
+  }
+  // Three sag classes for settled beads (picked by mass), one pendant.
+  const SAGS = [0.25, 0.6, 1.0];
+  const beadSets = SAGS.map((s) => bakeDropPair(s, 0));
+  const pendantSet = bakeDropPair(0.95, 0.8);
 
   // The splash ring: a thin bright annulus, soft both ways.
   const ringTex = (() => {
@@ -3872,27 +3910,36 @@ fn mainFragment(
   // INWARD (a pixel near the rim shows content nearer the drop's center
   // — magnification), amplitude rising toward the rim then releasing to
   // exactly neutral at the edge so the hard alpha edge is invisible.
-  // Amplitude is baked in four strengths because the filter's scale
-  // uniform is global: a small bead flies a weak lens so its warp stays
-  // proportional to its size.
-  function bakeLens(amp) {
+  // The lens wears the SAME sagged field as its bead (a circular warp
+  // under an egg silhouette betrays itself at the rim), so the inward
+  // direction is the field's own numeric gradient. Amplitude is baked
+  // in four strengths because the filter's scale uniform is global: a
+  // small bead flies a weak lens so its warp stays proportional.
+  function bakeLens(amp, sag, neck) {
     const n = 128;
     const c = document.createElement('canvas');
     c.width = n; c.height = n;
     const ctx = c.getContext('2d');
     const img = ctx.createImageData(n, n);
-    for (let y = 0; y < n; y++) {
-      for (let x = 0; x < n; x++) {
-        const dx = (x - (n - 1) / 2) / ((n - 1) / 2);
-        const dy = (y - (n - 1) / 2) / ((n - 1) / 2);
-        const r = Math.hypot(dx, dy);
-        const i = (y * n + x) * 4;
-        if (r > 1) { img.data[i + 3] = 0; continue; }
-        const u = Math.min(1, r / 0.72);
-        const rise = u * u * (3 - 2 * u);
-        const a = amp * (r < 0.72 ? rise : Math.max(0, 1 - (r - 0.72) / 0.28));
-        const nx = r > 1e-6 ? dx / r : 0;
-        const ny = r > 1e-6 ? dy / r : 0;
+    const eps = 0.01;
+    for (let py = 0; py < n; py++) {
+      for (let px = 0; px < n; px++) {
+        const x = ((px + 0.5) / n * 2 - 1) * DROP_SPAN;
+        const y = ((py + 0.5) / n * 2 - 1) * DROP_SPAN;
+        const e = dropField(x, y, sag, neck);
+        const i = (py * n + px) * 4;
+        if (e >= 1) { img.data[i + 3] = 0; continue; }
+        const u = Math.sqrt(e);
+        const t = Math.min(1, u / 0.72);
+        const rise = t * t * (3 - 2 * t);
+        const a = amp * (u < 0.72 ? rise : Math.max(0, 1 - (u - 0.72) / 0.28));
+        const gx = dropField(x + eps, y, sag, neck)
+          - dropField(x - eps, y, sag, neck);
+        const gy = dropField(x, y + eps, sag, neck)
+          - dropField(x, y - eps, sag, neck);
+        const glen = Math.hypot(gx, gy);
+        const nx = glen > 1e-9 ? gx / glen : 0;
+        const ny = glen > 1e-9 ? gy / glen : 0;
         img.data[i] = Math.round(128 - nx * a);
         img.data[i + 1] = Math.round(128 - ny * a);
         img.data[i + 2] = 128;
@@ -3902,7 +3949,9 @@ fn mainFragment(
     ctx.putImageData(img, 0, 0);
     return PIXI.Texture.from(c);
   }
-  const lensTexes = [bakeLens(40), bakeLens(70), bakeLens(100), bakeLens(127)];
+  const LENS_AMPS = [40, 70, 100, 127];
+  const lensSets = SAGS.map((s) => LENS_AMPS.map((a) => bakeLens(a, s, 0)));
+  const pendantLens = bakeLens(110, 0.95, 0.8);
 
   // The rain lanes: shadow multiplies first, light adds above it.
   const rainDim = new PIXI.Container();
@@ -3940,8 +3989,9 @@ fn mainFragment(
   }
   const streaks = rainPool(rainAdd, streakTex, 1);
   const heads = rainPool(rainAdd, lanternTex);
-  const beads = rainPool(rainAdd, beadTex);
-  const dims = rainPool(rainDim, beadDimTex);
+  const trails = rainPool(rainAdd, streakTex, 1);
+  const beads = rainPool(rainAdd, beadSets[1].light);
+  const dims = rainPool(rainDim, beadSets[1].dim);
   const rings = rainPool(rainAdd, ringTex);
   const sparks = rainPool(rainAdd, lanternTex);
   const curtain = rainPool(rainAdd, streakTex, 1);
@@ -3997,7 +4047,7 @@ fn mainFragment(
   lensScene.addChild(lensBase);
   const lensInk = new PIXI.Container();
   lensScene.addChild(lensInk);
-  const lenses = rainPool(lensInk, lensTexes[3]);
+  const lenses = rainPool(lensInk, lensSets[2][3]);
   const lensMapSprite = new PIXI.Sprite(lensRT);
   lensMapSprite.width = WALL; lensMapSprite.height = WALL;
   world.addChild(lensMapSprite); // the filter ctor sets renderable=false
@@ -4376,38 +4426,68 @@ fn mainFragment(
         s.alpha = (0.5 + 0.35 * heft) * sheet * depth;
         const head = heads.at(heads.used++);
         head.position.set(d.x, d.y);
-        head.width = head.height = (8 + 7 * heft) * dropDial * depth;
+        // Big drops in flight flatten against the air — oblate, never
+        // the cartoon teardrop.
+        head.width = (8 + 7 * heft) * dropDial * depth;
+        head.height = head.width * 0.85;
         head.tint = 0xe8f3ff;
         head.alpha = 0.8 * sheet * depth;
       } else if (d.state === 'running') {
         const m = d.m ?? 1;
         let r = (4.2 + 4.2 * m) * dropDial;
         let by = d.y;
-        let squash = 0;
+        // The Bond number in three steps: mass picks how far gravity
+        // beats tension, and the whole texture family (light, shadow,
+        // lens) swaps together so silhouette and warp agree.
+        const sagIdx = m < 0.75 ? 0 : m < 1.35 ? 1 : 2;
+        let set = beadSets[sagIdx];
+        let lensTex = lensSets[sagIdx][
+          r < 8.5 ? 0 : r < 12 ? 1 : r < 15.5 ? 2 : 3];
+        let sw = 1, sh = 1;
         if (d.pooling) {
-          // Water gathered at the lower rim: hanging, swelling,
-          // stretching a little as its hold runs out.
-          squash = Math.min(1, d.life / 0.9);
-          r *= 1 + squash * 0.3;
-          by += 1.5 + squash * 2;
+          // Hanging at a lower rim: the drop necks into a pendant and
+          // stretches as its hold runs out.
+          const swell = Math.min(1, d.life / 0.9);
+          set = pendantSet;
+          lensTex = pendantLens;
+          r *= 1 + swell * 0.22;
+          by += 1.5 + swell * 2.2;
+          sw = 1 - swell * 0.12;
+          sh = 1.08 + swell * 0.55;
+        } else {
+          // A sliding drop is alive: it jiggles about its shape as it
+          // crawls, and tows a thin bright wake — the wet track it
+          // just licked onto the paint.
+          const jig = (hashed(RAIN_SEED, d.salt,
+            90 + (Math.floor(clock * 12) & 15)) - 0.5) * 0.09;
+          sw = 1 + jig;
+          sh = 1 - jig * 0.8;
+          const trail = trails.at(trails.used++);
+          trail.position.set(d.x, by - r * 0.55);
+          trail.rotation = 0;
+          trail.height = r * (2.3 + 1.6 * m);
+          trail.width = r * 0.85;
+          trail.alpha = 0.13;
         }
         const shimmer = 0.9
           + 0.1 * hashed(RAIN_SEED, d.salt, 30 + (Math.floor(clock * 8) & 15));
         const dim = dims.at(dims.used++);
+        dim.texture = set.dim;
         dim.position.set(d.x, by);
-        dim.width = r * 2.5;
-        dim.height = r * 2.5 * (1 + squash * 0.35);
+        dim.width = r * 3.0 * sw;
+        dim.height = r * 3.0 * sh;
         dim.alpha = 0.85;
         const body = beads.at(beads.used++);
+        body.texture = set.light;
         body.position.set(d.x, by);
-        body.width = r * 2.5;
-        body.height = r * 2.5 * (1 + squash * 0.35);
-        body.alpha = (0.8 + 0.2 * squash) * shimmer;
+        body.width = r * 3.0 * sw;
+        body.height = r * 3.0 * sh;
+        body.alpha = 0.95 * shimmer;
         const lens = lenses.at(lenses.used++);
-        lens.texture = r < 8.5 ? lensTexes[0] : r < 12 ? lensTexes[1]
-          : r < 15.5 ? lensTexes[2] : lensTexes[3];
+        lens.texture = lensTex;
         lens.position.set(d.x, by);
-        lens.width = lens.height = r * 2.15 * (1 + squash * 0.25);
+        lens.width = r * 2.85 * sw;
+        lens.height = r * 2.85 * sh;
       } else {
         // The crown: sparks thrown on gravity arcs, stateless in
         // (fade, salt) so any frame replays.
