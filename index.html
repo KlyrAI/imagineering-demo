@@ -292,6 +292,14 @@
         the gathered crescent, light withheld for the rim and body
         shadow &mdash; and its lens wears the same sagged silhouette.
       </p>
+      <p class="note">
+        <b>Drops live together, windshield rules.</b> A field of static
+        condensation textures the wall; heavy sliders carry the motion
+        &mdash; each one absorbs every droplet in its swept path,
+        growing as it goes, shedding a dotted trail of micro-drops that
+        costs it mass, so it starves, stalls, gathers and lurches again.
+        Rain impacts feed the field; a dry spell evaporates it.
+      </p>
     </div>
   </aside>
 </div>
@@ -4094,6 +4102,125 @@ fn mainFragment(
     }
   }
 
+  // ---- the glass layer -------------------------------------------------
+  // The windshield truth, from the canonical rain-on-glass sims
+  // (Codrops' RainEffect, raindrop-fx): realism is INTERACTION, not
+  // per-drop beauty. A dense field of static condensation textures the
+  // pane; a few heavy sliders carry all the motion — and a slider EATS
+  // every droplet in its swept path, growing as it goes, shedding a
+  // dotted trail of micro-droplets behind it. The trail costs mass, so
+  // a slider starves back below critical and stalls, then gathers and
+  // lurches again: stick-slip with no timer, it self-organizes. Rain
+  // impacts feed the field; a dry spell evaporates it.
+  const pane = { drops: [], salt: 1, grid: new Map() };
+  const PANE_CELL = 48;
+  function paneSpawn(x, y, r, kind) {
+    pane.salt = (pane.salt + 0x9e37) >>> 0;
+    const d = {
+      x, y, r, vy: 0, kind, salt: pane.salt, trailAt: 0,
+      wig: hashed(RAIN_SEED, pane.salt, 4) * 6.283,
+    };
+    pane.drops.push(d);
+    return d;
+  }
+  function stepPane(dt) {
+    const dial = dropDial;
+    const crit = 8 * dial;
+    const want = targetCount > 0
+      ? Math.min(2000, Math.round(420 + targetCount * 2)) : 0;
+    // Condensation gathers a few droplets per frame; one in twenty is
+    // born heavy so the first sliders move within seconds.
+    let born = Math.min(8, want - pane.drops.length);
+    while (born-- > 0) {
+      pane.salt = (pane.salt + 0x9e37) >>> 0;
+      const h1 = hashed(RAIN_SEED, pane.salt, 1);
+      const h2 = hashed(RAIN_SEED, pane.salt, 2);
+      const h3 = hashed(RAIN_SEED, pane.salt, 3);
+      paneSpawn(h1 * WALL, h2 * WALL,
+                (h3 < 0.09 ? 5.5 + h1 * 2.8 : 1.6 + h3 * 2.8) * dial, 0);
+    }
+    pane.grid.clear();
+    for (let i = 0; i < pane.drops.length; i++) {
+      const d = pane.drops[i];
+      const key = Math.floor(d.x / PANE_CELL) * 4096
+        + Math.floor(d.y / PANE_CELL);
+      let list = pane.grid.get(key);
+      if (!list) { list = []; pane.grid.set(key, list); }
+      list.push(i);
+    }
+    const dead = new Set();
+    for (let i = 0; i < pane.drops.length; i++) {
+      const d = pane.drops[i];
+      if (dead.has(i)) continue;
+      if (d.kind === 0) {
+        // Condensation breathes in; past critical it becomes a slider.
+        d.r += dt * 0.2 * dial;
+        if (want === 0) d.r -= dt * 0.9 * dial;
+        if (d.r > crit * (0.95 + 0.1 * hashed(RAIN_SEED, d.salt, 5))) {
+          d.kind = 1;
+        }
+      } else if (d.kind === 2) {
+        // Trail droplets only evaporate — faster once the rain stops.
+        d.r -= dt * 0.3 * dial * (want === 0 ? 3 : 1);
+      } else {
+        // The slider: speed comes from mass in excess of friction's
+        // hold. Shedding and swallowing move it around that line.
+        const excess = d.r - crit * 0.85;
+        const target = excess > 0 ? Math.min(340, excess * 34) : 0;
+        d.vy += (target - d.vy) * Math.min(1, dt * 5);
+        if (want === 0) d.r -= dt * 0.5 * dial;
+        if (d.vy > 1) {
+          d.wig += dt * (1.3 + hashed(RAIN_SEED, d.salt, 6));
+          d.x += Math.sin(d.wig) * d.vy * 0.16 * dt;
+          d.y += d.vy * dt;
+          d.trailAt += d.vy * dt;
+          const gap = (11 + hashed(RAIN_SEED, d.salt, 7) * 9) * dial;
+          if (d.trailAt > gap && d.r > 3.5 * dial) {
+            d.trailAt = 0;
+            const tr = d.r
+              * (0.2 + hashed(RAIN_SEED, (d.salt + 17) >>> 0, 8) * 0.13);
+            paneSpawn(d.x - Math.sin(d.wig) * d.r * 0.2,
+                      d.y - d.r * 0.9, tr, 2);
+            d.r = Math.cbrt(Math.max(1, d.r ** 3 - tr ** 3 * 0.8));
+          }
+          // Absorb everything in the swept path — smaller sliders
+          // included. Swallowing slows it: inertia is not free.
+          const reach = d.r * 0.95;
+          const cx = Math.floor(d.x / PANE_CELL);
+          const cy = Math.floor(d.y / PANE_CELL);
+          for (let ox = -1; ox <= 1; ox++) {
+            for (let oy = -1; oy <= 1; oy++) {
+              const list = pane.grid.get((cx + ox) * 4096 + (cy + oy));
+              if (!list) continue;
+              for (const oi of list) {
+                if (oi === i || dead.has(oi)) continue;
+                const o = pane.drops[oi];
+                if (o.kind === 1 && o.r > d.r) continue;
+                const dx = o.x - d.x, dy = o.y - d.y;
+                const rr = reach + o.r * 0.6;
+                if (dx * dx + dy * dy < rr * rr) {
+                  d.r = Math.min(30 * dial,
+                                 Math.cbrt(d.r ** 3 + o.r ** 3 * 0.9));
+                  d.vy *= 0.82;
+                  dead.add(oi);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    if (dead.size || pane.drops.length) {
+      const next = [];
+      for (let i = 0; i < pane.drops.length; i++) {
+        const d = pane.drops[i];
+        if (dead.has(i) || d.y > WALL + 40 || d.r < 0.7) continue;
+        next.push(d);
+      }
+      pane.drops = next;
+    }
+  }
+
   // Storms drive their own air: hashed gusts on a hashed schedule, and
   // a flinch through the whole wall when the lightning cracks.
   let autoGustAt = 0;
@@ -4116,8 +4243,12 @@ fn mainFragment(
   // shed 0.85: the dense frontal print has no drip tips — every paper
   // lake's rim is a closed loop — so runs must bead off and fall on, or
   // the whole population beads up on the canopy within seconds.
+  // shed 2.2 / pool 1.6: a bead's life on the wall. The first cut shed
+  // at 0.85s and every bead blinked — formed, vanished, re-formed a few
+  // pixels lower — because the whole run fit inside a second. Water
+  // crawls, gathers, and only then lets go.
   const rain = { ...DEFAULT_RAIN, count: 0, terminal: 620, runoff: 110,
-                 shed: 0.85, pool: 1.1, sizing: 1, friction: 0.6, merge: 6 };
+                 shed: 2.2, pool: 1.6, sizing: 1, friction: 0.6, merge: 6 };
   // Scene entry fills the whole column once, so rain arrives as weather
   // in progress instead of one synchronized curtain making waves.
   const rainSeedSettings = { ...rain, spawnSpan: 1.0 };
@@ -4127,6 +4258,13 @@ fn mainFragment(
   // Impact rings: every landing rings once, whatever the drop decides
   // to do next. Drawn stateless from (t0, heft), capped, self-expiring.
   const splashes = [];
+  // Draw-side continuity. The sim switches states in one step — that
+  // IS the parity contract — but water on glass never blinks: a bead
+  // spreads in over ~130ms when its drop lands, and dries out over
+  // ~200ms as a shrinking remnant when its drop departs (sheds, drips,
+  // or merges away). Presentation memory only; the sim is untouched.
+  const beadFx = new Map(); // drop index -> {salt, p, r, x, y, sagIdx}
+  const beadGhosts = [];    // orphaned beads drying where they stood
   let burstSalt = 0x9000;
   let replaceAt = 0;
 
@@ -4343,6 +4481,11 @@ fn mainFragment(
         splashes.push({ x: d.x, y: d.y, t0: clock,
                         heft: 0.7 + (d.m ?? 1) * 0.45 });
         if (splashes.length > 140) splashes.splice(0, splashes.length - 140);
+        // The impact feeds the glass layer: surface water accumulates
+        // where the rain actually lands.
+        if (pane.drops.length < 1800) {
+          paneSpawn(d.x, d.y, (3.2 + (d.m ?? 1) * 2.2) * dropDial, 0);
+        }
         if (d.band !== 0) continue;
         // A landing on the cast hands momentum to the nearest petal —
         // force times lever arm about its anchor, as before.
@@ -4368,6 +4511,9 @@ fn mainFragment(
         }
       }
     }
+
+    // The glass layer breathes whenever there is water to carry.
+    if (targetCount > 0 || pane.drops.length > 0) stepPane(dt);
 
     // Pooled water has WEIGHT: every drop hanging at a lower rim leans
     // on the nearest petal until it drips, and the petal springs back —
@@ -4409,12 +4555,34 @@ fn mainFragment(
     for (const c of rainDim.children) c.visible = false;
     for (const c of lensInk.children) c.visible = false;
     for (const p of rainPools) p.used = 0;
-    for (const d of drops) {
+    for (let di = 0; di < drops.length; di++) {
+      const d = drops[di];
+      // A respawned slot is a DIFFERENT drop (merge-absorbed, or off
+      // the bottom): orphan its bead so it dries where it stood
+      // instead of vanishing.
+      let fx = beadFx.get(di);
+      if (fx && fx.salt !== d.salt) {
+        if (fx.p > 0.04) beadGhosts.push(fx);
+        beadFx.delete(di);
+        fx = undefined;
+      }
       if (d.state === 'falling') {
         const speed = Math.hypot(d.vx, d.vy);
         if (speed < 1 || d.y < -4) continue;
         const heft = 0.7 + (d.m ?? 1) * 0.45;
         const depth = d.band === 0 ? 1 : 0.8;
+        if (d.life > 0 || speed < 170) {
+          // A shed transit or a fresh drip: a slow dribble is a small
+          // falling droplet, never a rain streak — the streak popping
+          // in at walking pace was half the blink.
+          const head = heads.at(heads.used++);
+          head.position.set(d.x, d.y);
+          head.width = (5 + 4 * heft) * dropDial * depth;
+          head.height = head.width * 1.15;
+          head.tint = 0xdceeff;
+          head.alpha = 0.55 * depth * Math.min(1, speed / 170);
+          continue;
+        }
         const sheet = 0.7 + 0.3 * wobble(11, 7, d.x * 0.0013 - clock * 0.5);
         const tail = Math.min(34, speed * 0.035) * (0.8 + 0.4 * heft)
           * (1 + 0.6 * dropDial);
@@ -4433,61 +4601,48 @@ fn mainFragment(
         head.tint = 0xe8f3ff;
         head.alpha = 0.8 * sheet * depth;
       } else if (d.state === 'running') {
+        // The glass layer owns the settled beads now — a plain running
+        // drop still wets the paint and leans its petal, invisibly.
+        // The PENDANT is the exception: water gathered at a leaf's
+        // lower rim, necking before the drip, is the print's own story
+        // and keeps its envelope (spread in, dry out, never blink).
+        if (!d.pooling) continue;
         const m = d.m ?? 1;
         let r = (4.2 + 4.2 * m) * dropDial;
-        let by = d.y;
-        // The Bond number in three steps: mass picks how far gravity
-        // beats tension, and the whole texture family (light, shadow,
-        // lens) swaps together so silhouette and warp agree.
-        const sagIdx = m < 0.75 ? 0 : m < 1.35 ? 1 : 2;
-        let set = beadSets[sagIdx];
-        let lensTex = lensSets[sagIdx][
-          r < 8.5 ? 0 : r < 12 ? 1 : r < 15.5 ? 2 : 3];
-        let sw = 1, sh = 1;
-        if (d.pooling) {
-          // Hanging at a lower rim: the drop necks into a pendant and
-          // stretches as its hold runs out.
-          const swell = Math.min(1, d.life / 0.9);
-          set = pendantSet;
-          lensTex = pendantLens;
-          r *= 1 + swell * 0.22;
-          by += 1.5 + swell * 2.2;
-          sw = 1 - swell * 0.12;
-          sh = 1.08 + swell * 0.55;
-        } else {
-          // A sliding drop is alive: it jiggles about its shape as it
-          // crawls, and tows a thin bright wake — the wet track it
-          // just licked onto the paint.
-          const jig = (hashed(RAIN_SEED, d.salt,
-            90 + (Math.floor(clock * 12) & 15)) - 0.5) * 0.09;
-          sw = 1 + jig;
-          sh = 1 - jig * 0.8;
-          const trail = trails.at(trails.used++);
-          trail.position.set(d.x, by - r * 0.55);
-          trail.rotation = 0;
-          trail.height = r * (2.3 + 1.6 * m);
-          trail.width = r * 0.85;
-          trail.alpha = 0.13;
+        const swell = Math.min(1, d.life / 0.9);
+        r *= 1 + swell * 0.22;
+        const by = d.y + 1.5 + swell * 2.2;
+        const sw = 1 - swell * 0.12;
+        const sh = 1.08 + swell * 0.55;
+        if (!fx) {
+          fx = { salt: d.salt, p: 0, r: r * 0.5, x: d.x, y: by, sagIdx: 3 };
+          beadFx.set(di, fx);
         }
+        fx.p = Math.min(1, fx.p + dt / 0.13);
+        fx.r += (r - fx.r) * Math.min(1, dt / 0.15);
+        fx.x = d.x; fx.y = by; fx.sagIdx = 3;
+        const rr = fx.r;
         const shimmer = 0.9
           + 0.1 * hashed(RAIN_SEED, d.salt, 30 + (Math.floor(clock * 8) & 15));
         const dim = dims.at(dims.used++);
-        dim.texture = set.dim;
+        dim.texture = pendantSet.dim;
         dim.position.set(d.x, by);
-        dim.width = r * 3.0 * sw;
-        dim.height = r * 3.0 * sh;
-        dim.alpha = 0.85;
+        dim.width = rr * 3.0 * sw;
+        dim.height = rr * 3.0 * sh;
+        dim.alpha = 0.85 * fx.p;
         const body = beads.at(beads.used++);
-        body.texture = set.light;
+        body.texture = pendantSet.light;
         body.position.set(d.x, by);
-        body.width = r * 3.0 * sw;
-        body.height = r * 3.0 * sh;
-        body.alpha = 0.95 * shimmer;
+        body.width = rr * 3.0 * sw;
+        body.height = rr * 3.0 * sh;
+        body.alpha = 0.95 * shimmer * fx.p;
+        // The lens NEVER alpha-fades (translucent map pixels break the
+        // neutral encoding) — it grows in and shrinks out by size.
         const lens = lenses.at(lenses.used++);
-        lens.texture = lensTex;
+        lens.texture = pendantLens;
         lens.position.set(d.x, by);
-        lens.width = r * 2.85 * sw;
-        lens.height = r * 2.85 * sh;
+        lens.width = rr * 2.85 * sw * fx.p;
+        lens.height = rr * 2.85 * sh * fx.p;
       } else {
         // The crown: sparks thrown on gravity arcs, stateless in
         // (fade, salt) so any frame replays.
@@ -4506,6 +4661,89 @@ fn mainFragment(
         }
       }
     }
+    // The glass layer: condensation as faint texture, sliders bright
+    // and stretched by their speed, dotted trails behind them. Small
+    // drops stay round (the sag classes already encode tension vs
+    // gravity); everything shares the bead/lens language.
+    for (const pd of pane.drops) {
+      const r = pd.r;
+      if (r < 1.1) continue;
+      const sagIdx = r < 6 * dropDial ? 0 : r < 11 * dropDial ? 1 : 2;
+      const set = beadSets[sagIdx];
+      const stretch = pd.kind === 1 ? 1 + Math.min(0.4, pd.vy * 0.0015) : 1;
+      const vis = Math.min(1, 0.36 + (r / (9 * dropDial)) * 0.72);
+      const dim = dims.at(dims.used++);
+      dim.texture = set.dim;
+      dim.position.set(pd.x, pd.y);
+      dim.width = r * 3.0;
+      dim.height = r * 3.0 * stretch;
+      dim.alpha = 0.85 * vis;
+      const body = beads.at(beads.used++);
+      body.texture = set.light;
+      body.position.set(pd.x, pd.y);
+      body.width = r * 3.0;
+      body.height = r * 3.0 * stretch;
+      body.alpha = 0.9 * vis;
+      if (r > 2.6 * dropDial) {
+        const lens = lenses.at(lenses.used++);
+        lens.texture = lensSets[sagIdx][
+          r < 8.5 ? 0 : r < 12 ? 1 : r < 15.5 ? 2 : 3];
+        lens.position.set(pd.x, pd.y);
+        lens.width = r * 2.85;
+        lens.height = r * 2.85 * stretch;
+      }
+      if (pd.kind === 1 && pd.vy > 4) {
+        const trail = trails.at(trails.used++);
+        trail.position.set(pd.x, pd.y - r * 0.6);
+        trail.rotation = 0;
+        trail.height = r * 2.6;
+        trail.width = r * 0.8;
+        trail.alpha = 0.12;
+      }
+    }
+    // Remnants and ghosts: any bead whose drop is no longer running
+    // dries in place — shrinking, fading, its warp closing with it.
+    const drawRemnant = (g) => {
+      const set = g.sagIdx === 3 ? pendantSet : beadSets[g.sagIdx];
+      const size = g.r * 3.0 * (0.75 + 0.25 * g.p);
+      const dim = dims.at(dims.used++);
+      dim.texture = set.dim;
+      dim.position.set(g.x, g.y);
+      dim.width = size; dim.height = size * 1.02;
+      dim.alpha = 0.85 * g.p;
+      const body = beads.at(beads.used++);
+      body.texture = set.light;
+      body.position.set(g.x, g.y);
+      body.width = size; body.height = size * 1.02;
+      body.alpha = 0.8 * g.p;
+      const lens = lenses.at(lenses.used++);
+      lens.texture = g.sagIdx === 3 ? pendantLens : lensSets[g.sagIdx][1];
+      lens.position.set(g.x, g.y);
+      lens.width = lens.height = g.r * 2.85 * g.p;
+    };
+    for (const [key, entry] of beadFx) {
+      if (key >= drops.length) {
+        beadFx.delete(key);
+        if (entry.p > 0.04) beadGhosts.push(entry);
+        continue;
+      }
+      if (drops[key].state === 'running' && drops[key].pooling
+          && drops[key].salt === entry.salt) {
+        continue; // alive; the pendant branch maintains it
+      }
+      entry.p -= dt / 0.2;
+      if (entry.p <= 0) { beadFx.delete(key); continue; }
+      drawRemnant(entry);
+    }
+    if (beadGhosts.length > 200) {
+      beadGhosts.splice(0, beadGhosts.length - 200);
+    }
+    for (let gi = beadGhosts.length - 1; gi >= 0; gi--) {
+      const g = beadGhosts[gi];
+      g.p -= dt / 0.18;
+      if (g.p <= 0) { beadGhosts.splice(gi, 1); continue; }
+      drawRemnant(g);
+    }
     drawCurtain(dt);
     // Impact rings, one per landing, whatever the drop did next.
     const RING_LIFE = 0.5;
@@ -4523,7 +4761,7 @@ fn mainFragment(
     // The optical warp: refresh the lens map and aim the filter only
     // while there is water on the wall; scale rides the screen zoom so
     // a bead warps by its own size at any window size.
-    const wet = drops.length > 0;
+    const wet = drops.length > 0 || pane.drops.length > 0;
     if (wet !== lensOn) {
       world.filters = wet ? [dropletFilter] : null;
       lensOn = wet;
@@ -4854,7 +5092,7 @@ fn mainFragment(
   const presetMatch = rawHash.match(/(?:^|&)p=([A-Za-z0-9_-]+)/);
   const bootName = rawHash
     .replace(/(?:^|&)p=[A-Za-z0-9_-]+/, '')
-    .replace('RAWLIGHT', '').replace('RIPPLE', '')
+    .replace('RAWLIGHT', '').replace('RIPPLE', '').replace('PANEQA', '')
     .replace(/^&+|&+$/g, '');
   const bootScene = SCENES[bootName] ? bootName : 'noon';
   // QA affordance: '&RIPPLE' keeps one ripple alive so headless
@@ -5061,6 +5299,12 @@ fn mainFragment(
     applyPreset(bootPreset);
   } else {
     applyScene(bootScene);
+  }
+  // QA affordance: '&PANEQA' fast-forwards the glass layer ~30s so a
+  // headless frame-zero screenshot shows a mature droplet field —
+  // condensation grown, sliders moving, trails laid.
+  if (location.hash.includes('PANEQA')) {
+    for (let i = 0; i < 900; i++) stepPane(1 / 30);
   }
   // Boot straight INTO the scene: the dials start at their targets
   // rather than easing from noon.
