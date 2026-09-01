@@ -4156,19 +4156,23 @@ fn mainFragment(
     const r = d.r;
     const sagIdx = r < 6 * dial ? 0 : r < 11 * dial ? 1 : 2;
     const set = beadSets[sagIdx];
-    const stretch = d.kind === 1 ? 1 + Math.min(0.4, d.vy * 0.0015) : 1;
+    // The eased stretch (a stalled slider keeps relaxing toward round)
+    // with a mild width trade — the tail retracts INTO the head, the
+    // silhouette never just deflates.
+    const stretch = d.stretch || 1;
+    const wNarrow = 1 - (stretch - 1) * 0.35;
     const vis = Math.min(1, 0.36 + (r / (9 * dial)) * 0.72);
     if (!d.sb) d.sb = paneAcquire('add', paneAdd, set.light);
     d.sb.texture = set.light;
     d.sb.position.set(d.x, d.y);
-    d.sb.width = r * 3.0;
+    d.sb.width = r * 3.0 * wNarrow;
     d.sb.height = r * 3.0 * stretch;
     d.sb.alpha = 0.9 * vis;
     if (r > 3 * dial) {
       if (!d.sd) d.sd = paneAcquire('dim', paneDim, set.dim);
       d.sd.texture = set.dim;
       d.sd.position.set(d.x, d.y);
-      d.sd.width = r * 3.0;
+      d.sd.width = r * 3.0 * wNarrow;
       d.sd.height = r * 3.0 * stretch;
       d.sd.alpha = 0.85 * vis;
     } else {
@@ -4179,7 +4183,7 @@ fn mainFragment(
       d.sl.texture = lensSets[sagIdx][
         r < 8.5 ? 0 : r < 12 ? 1 : r < 15.5 ? 2 : 3];
       d.sl.position.set(d.x, d.y);
-      d.sl.width = r * 2.85;
+      d.sl.width = r * 2.85 * wNarrow;
       d.sl.height = r * 2.85 * stretch;
     } else {
       paneDropSprite(d, 'sl', 'lens');
@@ -4196,6 +4200,7 @@ fn mainFragment(
       paneDropSprite(d, 'st', 'add');
     }
     d.syncedR = r;
+    d.syncedStretch = stretch;
   }
   function paneSpawn(x, y, r, kind) {
     pane.salt = (pane.salt + 0x9e37) >>> 0;
@@ -4204,6 +4209,7 @@ fn mainFragment(
     const d = {
       x, y, r: r * 0.45, rT: r, vy: 0, kind, salt: pane.salt,
       trailAt: 0, into: null, syncedR: 0,
+      stretch: 1, syncedStretch: 1,
       sb: null, sd: null, sl: null, st: null,
       wig: hashed(RAIN_SEED, pane.salt, 4) * 6.283,
     };
@@ -4245,6 +4251,8 @@ fn mainFragment(
         // the small drop shrinks, and the eye sees one water.
         const s = d.into;
         if (!s || s.r < 0.7) { d.kind = 0; d.into = null; continue; }
+        d.stretch = (d.stretch || 1)
+          + (1 - (d.stretch || 1)) * Math.min(1, dt * 6);
         const pull = Math.min(1, dt / 0.09);
         d.x += (s.x - d.x) * pull;
         d.y += (s.y - d.y) * pull;
@@ -4285,6 +4293,11 @@ fn mainFragment(
         const excess = d.r - crit * 0.85;
         const target = excess > 0 ? Math.min(340, excess * 34) : 0;
         d.vy += (target - d.vy) * Math.min(1, dt * 5);
+        // Stretch is a STATE with its own lag: a stalling drop
+        // retracts its tail smoothly instead of snapping round.
+        const stTarget = 1 + Math.min(0.4, d.vy * 0.0015);
+        d.stretch = (d.stretch || 1)
+          + (stTarget - (d.stretch || 1)) * Math.min(1, dt * 6);
         if (want === 0) d.r -= dt * 0.5 * dial;
         if (d.vy > 1) {
           d.wig += dt * (1.3 + hashed(RAIN_SEED, d.salt, 6));
@@ -4332,7 +4345,10 @@ fn mainFragment(
             }
           }
         }
-        if (d.vy > 1 || Math.abs(d.r - d.syncedR) > 0.25) paneSync(d);
+        if (d.vy > 1 || Math.abs(d.r - d.syncedR) > 0.25
+            || Math.abs((d.stretch || 1) - (d.syncedStretch || 1)) > 0.015) {
+          paneSync(d);
+        }
       }
     }
     {
@@ -4743,6 +4759,9 @@ fn mainFragment(
         fx.p = Math.min(1, fx.p + dt / 0.13);
         fx.r += (r - fx.r) * Math.min(1, dt / 0.15);
         fx.x = d.x; fx.y = by; fx.sagIdx = 3;
+        // The remnant inherits the shape at departure — the residue
+        // after the drip starts stretched and relaxes, never snaps.
+        fx.sw = sw; fx.sh = sh;
         const rr = fx.r;
         const shimmer = 0.9
           + 0.1 * hashed(RAIN_SEED, d.salt, 30 + (Math.floor(clock * 8) & 15));
@@ -4789,21 +4808,28 @@ fn mainFragment(
     // dries in place — shrinking, fading, its warp closing with it.
     const drawRemnant = (g) => {
       const set = g.sagIdx === 3 ? pendantSet : beadSets[g.sagIdx];
-      const size = g.r * 3.0 * (0.75 + 0.25 * g.p);
+      // The residue after a drip: most of the mass left with the drop,
+      // and tension pulls what stays back toward a small round bead —
+      // it contracts from the departure shape, it never pops there.
+      const relax = g.p;
+      const sw = 1 + ((g.sw || 1) - 1) * relax;
+      const sh = 1 + ((g.sh || 1.02) - 1) * relax;
+      const size = g.r * 3.0 * (0.5 + 0.5 * relax);
       const dim = dims.at(dims.used++);
       dim.texture = set.dim;
       dim.position.set(g.x, g.y);
-      dim.width = size; dim.height = size * 1.02;
+      dim.width = size * sw; dim.height = size * sh;
       dim.alpha = 0.85 * g.p;
       const body = beads.at(beads.used++);
       body.texture = set.light;
       body.position.set(g.x, g.y);
-      body.width = size; body.height = size * 1.02;
+      body.width = size * sw; body.height = size * sh;
       body.alpha = 0.8 * g.p;
       const lens = lenses.at(lenses.used++);
       lens.texture = g.sagIdx === 3 ? pendantLens : lensSets[g.sagIdx][1];
       lens.position.set(g.x, g.y);
-      lens.width = lens.height = g.r * 2.85 * g.p;
+      lens.width = g.r * 2.85 * g.p * sw;
+      lens.height = g.r * 2.85 * g.p * sh;
     };
     for (const [key, entry] of beadFx) {
       if (key >= drops.length) {
