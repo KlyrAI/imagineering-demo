@@ -226,12 +226,13 @@
   .camrow button.on { border-color: var(--accent); color: var(--accent); }
   .camstatus { color: var(--ink-dim); font-size: 11px; margin-top: 5px;
     min-height: 14px; }
-  #fspill {
+  #fspill, #exitpill {
     position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
     z-index: 70; background: rgba(10, 13, 11, 0.9); color: var(--ink);
     border: 1px solid var(--edge); border-radius: 999px; padding: 6px 16px;
     font-size: 12px; cursor: pointer; display: none;
   }
+  #exitpill { bottom: 52px; }
   /* The operator window: same file, no stage — controls only. */
   body.operator { background: #0d120e; overflow: auto; }
   #operator { display: none; max-width: 420px; margin: 0 auto; padding: 12px;
@@ -297,6 +298,7 @@
     </div>
     <div id="campanel"></div>
     <div id="fspill">click for fullscreen</div>
+    <div id="exitpill">exit projection &middot; Esc</div>
   </div>
   <aside>
     <div class="group">
@@ -5489,6 +5491,7 @@ fn mainFragment(
   const CAL_KEY = 'wallCal.v1';
   const handleEls = [...document.querySelectorAll('.cal-handle')];
   const fspill = document.getElementById('fspill');
+  const exitpill = document.getElementById('exitpill');
   let calSaveTimer = 0;
   function calSave() {
     clearTimeout(calSaveTimer);
@@ -5626,6 +5629,13 @@ fn mainFragment(
   function updateFsPill() {
     fspill.style.display = proj.on && !document.fullscreenElement
       && document.fullscreenEnabled ? 'block' : 'none';
+    // The way back out: projecting hides the whole control surface, so
+    // without this pill (and Esc) a saved-on calibration reboots into a
+    // wall with no UI at all. Hidden in fullscreen — the venue wall
+    // must stay dark — but the browser's own Esc leaves fullscreen
+    // first, which reveals it.
+    exitpill.style.display = proj.on && !document.fullscreenElement
+      ? 'block' : 'none';
   }
   function calTouched() {
     calSave();
@@ -5732,6 +5742,13 @@ fn mainFragment(
     });
   });
   document.addEventListener('keydown', (e) => {
+    // Esc always retreats one level: calibrate -> projecting -> the
+    // normal page. It used to work only in calibrate mode, which left
+    // plain projection inescapable from the keyboard.
+    if (e.key === 'Escape' && proj.on && !proj.cal) {
+      exitProjection();
+      return;
+    }
     if (!proj.cal) return;
     const tag = (document.activeElement && document.activeElement.tagName) || '';
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
@@ -5759,6 +5776,7 @@ fn mainFragment(
   fspill.addEventListener('click', () => {
     wrap.requestFullscreen().catch(() => {});
   });
+  exitpill.addEventListener('click', () => exitProjection());
   // Resizes re-derive the pixel quad from the stored fractions.
   app.renderer.on('resize', () => {
     requestAnimationFrame(() => {
