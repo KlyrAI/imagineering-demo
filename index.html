@@ -279,6 +279,8 @@
         <span>dy</span><input type="number" id="trimdy" step="0.5"></div>
       <div class="row2"><span>scale</span><input type="number" id="trimscale" step="0.001">
         <span>rot&deg;</span><input type="number" id="trimrot" step="0.05"></div>
+      <div class="row2"><span>wide</span><input type="number" id="trimsx" step="0.001">
+        <span>tall</span><input type="number" id="trimsy" step="0.001"></div>
       <div class="row2">
         <button id="calcam">Camera</button>
         <button id="calsnap">Snap</button>
@@ -289,6 +291,7 @@
         <button id="calexit">Exit</button></div>
       <div class="camstatus" id="calnote">Drag corners onto the wall.
         Drag inside: slide print. Wheel: scale. Alt+wheel: rotate.
+        Shift+wheel: tile width. Shift+Alt+wheel: tile height.
         Tab cycles corners, arrows nudge (Shift 10, Alt &frac14;).
         Zero the projector's own keystone first.</div>
     </div>
@@ -481,6 +484,10 @@
       <input type="number" id="opscale" step="0.001">
       <span class="lab">rot&deg;</span>
       <input type="number" id="oprot" step="0.05"></div>
+    <div class="oprow"><span class="lab">wide</span>
+      <input type="number" id="opsx" step="0.001">
+      <span class="lab">tall</span>
+      <input type="number" id="opsy" step="0.001"></div>
     <div class="oprow">
       <button id="opgrid">Grid</button>
       <button id="opflood">White</button>
@@ -2849,7 +2856,7 @@ fn mainFragment(
   const proj = {
     on: false, cal: false,
     corners: null,                     // [[fx,fy]x4], fractions of wrap
-    trim: { dx: 0, dy: 0, scale: 1, rot: 0 },
+    trim: { dx: 0, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1 },
     H: null,                           // wall-unit -> wrap-px homography
     frame: null,                       // wall letterbox inside the canvas
     active: 0, grid: false, flood: false, blink: false,
@@ -2874,16 +2881,19 @@ fn mainFragment(
   // The letterbox, now composed with the content TRIM: the corner warp
   // (CSS, outside GL) fixes the projector-to-wall geometry, and the
   // trim slides/scales/rotates the print INSIDE that locked quad until
-  // the projected lattice sits on the printed one. Identity trim
-  // reproduces the old top-left letterbox exactly (center pivot +
-  // center position). calGrid follows the trim; calRef deliberately
-  // does not — its crosshairs are the camera's fixed reference.
+  // the projected lattice sits on the printed one. sx/sy stretch the
+  // print's own axes independently — the printed repeat is rarely a
+  // perfect square, and the corners must stay free for keystone alone.
+  // Identity trim reproduces the old top-left letterbox exactly
+  // (center pivot + center position). calGrid follows the trim; calRef
+  // deliberately does not — its crosshairs are the camera's fixed
+  // reference.
   function fit() {
     const s0 = Math.min(app.screen.width / WALL, app.screen.height / WALL);
     const s = s0 * proj.trim.scale;
     world.pivot.set(WALL / 2, WALL / 2);
     world.rotation = proj.trim.rot;
-    world.scale.set(s);
+    world.scale.set(s * proj.trim.sx, s * proj.trim.sy);
     world.position.set(
       app.screen.width / 2 + proj.trim.dx * s0,
       app.screen.height / 2 + proj.trim.dy * s0,
@@ -2891,7 +2901,7 @@ fn mainFragment(
     if (calGrid) {
       calGrid.pivot.set(WALL / 2, WALL / 2);
       calGrid.rotation = proj.trim.rot;
-      calGrid.scale.set(s);
+      calGrid.scale.copyFrom(world.scale);
       calGrid.position.copyFrom(world.position);
     }
     if (calRef) {
@@ -5388,8 +5398,12 @@ fn mainFragment(
         const ey = at.y - trimDrag.wy;
         const cosr = Math.cos(proj.trim.rot);
         const sinr = Math.sin(proj.trim.rot);
-        proj.trim.dx += (cosr * ex - sinr * ey) * proj.trim.scale;
-        proj.trim.dy += (sinr * ex + cosr * ey) * proj.trim.scale;
+        // Scale per-axis BEFORE rotating: PIXI applies scale in the
+        // print's local frame, and sx/sy make that order observable.
+        const gx = ex * proj.trim.scale * proj.trim.sx;
+        const gy = ey * proj.trim.scale * proj.trim.sy;
+        proj.trim.dx += cosr * gx - sinr * gy;
+        proj.trim.dy += sinr * gx + cosr * gy;
         fit();
         calTouched();
       }
@@ -5426,7 +5440,15 @@ fn mainFragment(
   wrap.addEventListener('wheel', (e) => {
     if (!proj.cal) return;
     e.preventDefault();
-    if (e.altKey) {
+    if (e.shiftKey) {
+      // Tile aspect, one axis at a time: the corner quad fixes the
+      // wall, this fixes a printed repeat that isn't square. Shift
+      // turns the wheel sideways in most browsers — read either axis.
+      const dy = e.deltaY || e.deltaX;
+      const key = e.altKey ? 'sy' : 'sx';
+      proj.trim[key] = Math.max(0.8, Math.min(1.25,
+        proj.trim[key] * Math.exp(-dy * 0.0004)));
+    } else if (e.altKey) {
       proj.trim.rot = Math.max(-0.07, Math.min(0.07,
         proj.trim.rot - e.deltaY * 0.00006));
     } else {
@@ -5477,8 +5499,24 @@ fn mainFragment(
       } catch (err) { /* ephemeral storage: Copy cal is the insurance */ }
     }, 300);
   }
+  // The starting quad matches the WALL's aspect (the letterboxed
+  // square inscribed in the window), not the window's: corners at the
+  // window corners stretched the square print to the projector's
+  // 16:9/16:10 the moment Project was hit, and parked every handle
+  // three-quarters off screen. From here the projection starts
+  // undistorted and the corners only ever add real keystone.
+  function defaultCorners() {
+    const w = wrap.clientWidth || 1;
+    const h = wrap.clientHeight || 1;
+    const ix = Math.min(w, h) / (2 * w);
+    const iy = Math.min(w, h) / (2 * h);
+    return [
+      [0.5 - ix, 0.5 - iy], [0.5 + ix, 0.5 - iy],
+      [0.5 + ix, 0.5 + iy], [0.5 - ix, 0.5 + iy],
+    ];
+  }
   function ensureCorners() {
-    if (!proj.corners) proj.corners = [[0, 0], [1, 0], [1, 1], [0, 1]];
+    if (!proj.corners) proj.corners = defaultCorners();
   }
   function calLoad() {
     let p = null;
@@ -5489,7 +5527,9 @@ fn mainFragment(
     if (Array.isArray(p.corners) && p.corners.length === 4) {
       proj.corners = p.corners;
     }
-    if (p.trim) proj.trim = { dx: 0, dy: 0, scale: 1, rot: 0, ...p.trim };
+    if (p.trim) {
+      proj.trim = { dx: 0, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1, ...p.trim };
+    }
     fit();
     // Fullscreen needs a user gesture; the pill offers it.
     if (p.on) enterProjection(false);
@@ -5573,6 +5613,8 @@ fn mainFragment(
     set('trimdy', +proj.trim.dy.toFixed(1));
     set('trimscale', +proj.trim.scale.toFixed(4));
     set('trimrot', +(proj.trim.rot * 180 / Math.PI).toFixed(2));
+    set('trimsx', +proj.trim.sx.toFixed(4));
+    set('trimsy', +proj.trim.sy.toFixed(4));
     const tog = (id, on) => {
       const el = document.getElementById(id);
       if (el) el.classList.toggle('on', !!on);
@@ -5770,8 +5812,8 @@ fn mainFragment(
     on('calflood', () => setFlags({ flood: !proj.flood }));
     on('calblink', () => setFlags({ blink: !proj.blink }));
     on('calreset', () => {
-      proj.corners = [[0, 0], [1, 0], [1, 1], [0, 1]];
-      proj.trim = { dx: 0, dy: 0, scale: 1, rot: 0 };
+      proj.corners = defaultCorners();
+      proj.trim = { dx: 0, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1 };
       fit();
       applyWarp();
       calTouched();
@@ -5791,12 +5833,32 @@ fn mainFragment(
         if (Array.isArray(p.corners) && p.corners.length === 4) {
           proj.corners = p.corners;
         }
-        if (p.trim) proj.trim = { dx: 0, dy: 0, scale: 1, rot: 0, ...p.trim };
+        if (p.trim) {
+          proj.trim = { dx: 0, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1, ...p.trim };
+        }
         fit();
         applyWarp();
         calTouched();
       } catch (err) { /* not a calibration string */ }
     });
+    // The trim readouts accept typed values too — the syncCalPanel
+    // guard already leaves a focused field alone for exactly this.
+    for (const [id, key, conv] of [
+      ['trimdx', 'dx', 1], ['trimdy', 'dy', 1],
+      ['trimscale', 'scale', 1], ['trimrot', 'rot', Math.PI / 180],
+      ['trimsx', 'sx', 1], ['trimsy', 'sy', 1],
+    ]) {
+      const el = document.getElementById(id);
+      if (el) {
+        el.addEventListener('change', () => {
+          const v = Number(el.value);
+          if (!Number.isFinite(v)) { syncCalPanel(); return; }
+          proj.trim = { ...proj.trim, [key]: v * conv };
+          fit();
+          calTouched();
+        });
+      }
+    }
     let rig = null;
     const camPanel = document.getElementById('campanel');
     const ensureRig = () => {
@@ -6183,7 +6245,7 @@ fn mainFragment(
     }
     const bus = new BroadcastChannel('wallCal');
     const state = {
-      trim: { dx: 0, dy: 0, scale: 1, rot: 0 },
+      trim: { dx: 0, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1 },
       grid: false, flood: false, blink: false, on: false,
     };
     let linked = false;
@@ -6197,6 +6259,8 @@ fn mainFragment(
       set('opdy', +state.trim.dy.toFixed(1));
       set('opscale', +state.trim.scale.toFixed(4));
       set('oprot', +(state.trim.rot * 180 / Math.PI).toFixed(2));
+      set('opsx', +(state.trim.sx ?? 1).toFixed(4));
+      set('opsy', +(state.trim.sy ?? 1).toFixed(4));
       $id('opgrid').classList.toggle('on', state.grid);
       $id('opflood').classList.toggle('on', state.flood);
       $id('opblink').classList.toggle('on', state.blink);
@@ -6226,6 +6290,7 @@ fn mainFragment(
     for (const [id, key, conv] of [
       ['opdx', 'dx', 1], ['opdy', 'dy', 1],
       ['opscale', 'scale', 1], ['oprot', 'rot', Math.PI / 180],
+      ['opsx', 'sx', 1], ['opsy', 'sy', 1],
     ]) {
       $id(id).addEventListener('change', () => {
         state.trim = { ...state.trim, [key]: Number($id(id).value) * conv };
@@ -6671,7 +6736,7 @@ fn mainFragment(
   // otherwise the saved venue calibration loads.
   if (location.hash.includes('CALQA')) {
     proj.corners = [[0.08, 0.05], [0.97, 0.09], [0.93, 0.94], [0.04, 0.9]];
-    proj.trim = { dx: 40, dy: 0, scale: 1, rot: 0 };
+    proj.trim = { dx: 40, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1 };
     proj.grid = true;
     fit();
     enterProjection(false);
