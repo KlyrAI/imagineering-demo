@@ -226,12 +226,27 @@
   .camrow button.on { border-color: var(--accent); color: var(--accent); }
   .camstatus { color: var(--ink-dim); font-size: 11px; margin-top: 5px;
     min-height: 14px; }
+  /* The two doors out of projection. Both ride the wall, so both fade
+     out on their own and come back on any pointer move - the operator
+     always has a way home, the audience never sees a chrome badge. */
   #fspill {
     position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
     z-index: 70; background: rgba(10, 13, 11, 0.9); color: var(--ink);
     border: 1px solid var(--edge); border-radius: 999px; padding: 6px 16px;
     font-size: 12px; cursor: pointer; display: none;
   }
+  #exitpill {
+    position: absolute; top: 12px; right: 12px; z-index: 71;
+    background: rgba(10, 13, 11, 0.9); color: var(--ink);
+    border: 1px solid var(--edge); border-radius: 999px; padding: 6px 14px;
+    font-size: 12px; cursor: pointer; display: none; user-select: none;
+  }
+  body.projecting #exitpill { display: block; }
+  /* Calibrating already carries its own Exit in the panel. */
+  body.calibrating #exitpill { display: none; }
+  #fspill, #exitpill { opacity: 0; transition: opacity 0.5s ease; }
+  #fspill.show, #exitpill.show, #fspill:hover, #exitpill:hover { opacity: 1; }
+  #exitpill:hover { border-color: var(--sage); }
   /* The operator window: same file, no stage — controls only. */
   body.operator { background: #0d120e; overflow: auto; }
   #operator { display: none; max-width: 420px; margin: 0 auto; padding: 12px;
@@ -290,10 +305,12 @@
       <div class="camstatus" id="calnote">Drag corners onto the wall.
         Drag inside: slide print. Wheel: scale. Alt+wheel: rotate.
         Tab cycles corners, arrows nudge (Shift 10, Alt &frac14;).
+        Esc closes calibrate, Esc again stops projecting.
         Zero the projector's own keystone first.</div>
     </div>
     <div id="campanel"></div>
     <div id="fspill">click for fullscreen</div>
+    <div id="exitpill" title="Leave projection (Esc)">Exit &#9099;</div>
   </div>
   <aside>
     <div class="group">
@@ -370,7 +387,10 @@
       onto the real printed wall: the print supplies the pigment, the
       beam carries only the living light &mdash; critters, rain, glow,
       sweep. <b>Project</b> goes fullscreen and applies the saved
-      corner warp. <b>Calibrate</b> shows draggable corners, the tile grid,
+      corner warp; <b>Esc</b> leaves it again (from fullscreen that reads
+      as two presses &mdash; the first one is the browser's), or click the
+      Exit chip that fades in whenever you move the mouse.
+      <b>Calibrate</b> shows draggable corners, the tile grid,
       and the camera tools &mdash; drag the projected corners onto the wall,
       then slide the print until the grid sits on the printed seams.
       <b>Pop out</b> opens the operator console for a second screen: camera,
@@ -5115,6 +5135,7 @@ fn mainFragment(
   const CAL_KEY = 'wallCal.v1';
   const handleEls = [...document.querySelectorAll('.cal-handle')];
   const fspill = document.getElementById('fspill');
+  const exitPill = document.getElementById('exitpill');
   let calSaveTimer = 0;
   function calSave() {
     clearTimeout(calSaveTimer);
@@ -5236,6 +5257,20 @@ fn mainFragment(
     fspill.style.display = proj.on && !document.fullscreenElement
       && document.fullscreenEnabled ? 'block' : 'none';
   }
+  // The way out has to be visible without living on the wall: the pills
+  // announce themselves when projection starts and whenever a hand
+  // moves the pointer, then fade back into the dark.
+  let doorTimer = 0;
+  function flashDoors() {
+    if (!proj.on) return;
+    fspill.classList.add('show');
+    exitPill.classList.add('show');
+    clearTimeout(doorTimer);
+    doorTimer = setTimeout(() => {
+      fspill.classList.remove('show');
+      exitPill.classList.remove('show');
+    }, 2600);
+  }
   function calTouched() {
     calSave();
     syncCalPanel();
@@ -5275,6 +5310,7 @@ fn mainFragment(
     applyWarp();
     syncOverlays();
     updateFsPill();
+    flashDoors();
     queueStageResize();
     calTouched();
   }
@@ -5292,6 +5328,9 @@ fn mainFragment(
     setCal(false);
     proj.on = false;
     document.body.classList.remove('projecting');
+    clearTimeout(doorTimer);
+    fspill.classList.remove('show');
+    exitPill.classList.remove('show');
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     applyWarp();
     syncOverlays();
@@ -5362,6 +5401,15 @@ fn mainFragment(
     });
   });
   document.addEventListener('keydown', (e) => {
+    // Escape is the way out, and it answers from anywhere - focus in a
+    // trim field included. One step per press: calibrate, then
+    // projection. (In fullscreen the browser eats the first press to
+    // leave fullscreen, so it reads as press-twice.)
+    if (e.key === 'Escape') {
+      if (proj.cal) setCal(false);
+      else if (proj.on) exitProjection();
+      return;
+    }
     if (!proj.cal) return;
     const tag = (document.activeElement && document.activeElement.tagName) || '';
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
@@ -5371,7 +5419,6 @@ fn mainFragment(
       positionHandles();
       return;
     }
-    if (e.key === 'Escape') { setCal(false); return; }
     const step = e.shiftKey ? 10 : e.altKey ? 0.25 : 1;
     const d = {
       ArrowLeft: [-step, 0], ArrowRight: [step, 0],
@@ -5384,11 +5431,17 @@ fn mainFragment(
   });
   document.addEventListener('fullscreenchange', () => {
     updateFsPill();
+    // Dropping out of fullscreen is usually the first half of someone
+    // trying to leave: show them the door.
+    flashDoors();
     queueStageResize();
   });
   fspill.addEventListener('click', () => {
     wrap.requestFullscreen().catch(() => {});
   });
+  exitPill.addEventListener('click', () => exitProjection());
+  document.addEventListener('pointermove', flashDoors, { passive: true });
+  document.addEventListener('pointerdown', flashDoors, { passive: true });
   // Resizes re-derive the pixel quad from the stored fractions.
   app.renderer.on('resize', () => {
     requestAnimationFrame(() => {
