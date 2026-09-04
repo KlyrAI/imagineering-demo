@@ -226,13 +226,12 @@
   .camrow button.on { border-color: var(--accent); color: var(--accent); }
   .camstatus { color: var(--ink-dim); font-size: 11px; margin-top: 5px;
     min-height: 14px; }
-  #fspill, #exitpill {
+  #fspill {
     position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
     z-index: 70; background: rgba(10, 13, 11, 0.9); color: var(--ink);
     border: 1px solid var(--edge); border-radius: 999px; padding: 6px 16px;
     font-size: 12px; cursor: pointer; display: none;
   }
-  #exitpill { bottom: 52px; }
   /* The operator window: same file, no stage — controls only. */
   body.operator { background: #0d120e; overflow: auto; }
   #operator { display: none; max-width: 420px; margin: 0 auto; padding: 12px;
@@ -280,8 +279,6 @@
         <span>dy</span><input type="number" id="trimdy" step="0.5"></div>
       <div class="row2"><span>scale</span><input type="number" id="trimscale" step="0.001">
         <span>rot&deg;</span><input type="number" id="trimrot" step="0.05"></div>
-      <div class="row2"><span>wide</span><input type="number" id="trimsx" step="0.001">
-        <span>tall</span><input type="number" id="trimsy" step="0.001"></div>
       <div class="row2">
         <button id="calcam">Camera</button>
         <button id="calsnap">Snap</button>
@@ -292,13 +289,11 @@
         <button id="calexit">Exit</button></div>
       <div class="camstatus" id="calnote">Drag corners onto the wall.
         Drag inside: slide print. Wheel: scale. Alt+wheel: rotate.
-        Shift+wheel: tile width. Shift+Alt+wheel: tile height.
         Tab cycles corners, arrows nudge (Shift 10, Alt &frac14;).
         Zero the projector's own keystone first.</div>
     </div>
     <div id="campanel"></div>
     <div id="fspill">click for fullscreen</div>
-    <div id="exitpill">exit projection &middot; Esc</div>
   </div>
   <aside>
     <div class="group">
@@ -377,7 +372,11 @@
         <button id="projcal">Calibrate</button>
       </div>
       <button id="projpop">Pop out controls</button>
-      <p class="note"><b>Project</b> goes fullscreen and applies the saved
+      <button id="projlight">Light only</button>
+      <p class="note"><b>Light only</b> is what the projector should emit
+      onto the real printed wall: the print supplies the pigment, the
+      beam carries only the living light &mdash; critters, rain, glow,
+      sweep. <b>Project</b> goes fullscreen and applies the saved
       corner warp. <b>Calibrate</b> shows draggable corners, the tile grid,
       and the camera tools &mdash; drag the projected corners onto the wall,
       then slide the print until the grid sits on the printed seams.
@@ -486,14 +485,11 @@
       <input type="number" id="opscale" step="0.001">
       <span class="lab">rot&deg;</span>
       <input type="number" id="oprot" step="0.05"></div>
-    <div class="oprow"><span class="lab">wide</span>
-      <input type="number" id="opsx" step="0.001">
-      <span class="lab">tall</span>
-      <input type="number" id="opsy" step="0.001"></div>
     <div class="oprow">
       <button id="opgrid">Grid</button>
       <button id="opflood">White</button>
       <button id="opblink">Blink</button>
+      <button id="oplight">Light</button>
       <button id="opsnap">Snap</button>
     </div>
   </div>
@@ -2858,10 +2854,10 @@ fn mainFragment(
   const proj = {
     on: false, cal: false,
     corners: null,                     // [[fx,fy]x4], fractions of wrap
-    trim: { dx: 0, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1 },
+    trim: { dx: 0, dy: 0, scale: 1, rot: 0 },
     H: null,                           // wall-unit -> wrap-px homography
     frame: null,                       // wall letterbox inside the canvas
-    active: 0, grid: false, flood: false, blink: false,
+    active: 0, grid: false, flood: false, blink: false, light: false,
   };
   let calRef = null;                   // trim-INdependent overlay
   let calGrid = null;                  // trim-following tile grid
@@ -2883,19 +2879,16 @@ fn mainFragment(
   // The letterbox, now composed with the content TRIM: the corner warp
   // (CSS, outside GL) fixes the projector-to-wall geometry, and the
   // trim slides/scales/rotates the print INSIDE that locked quad until
-  // the projected lattice sits on the printed one. sx/sy stretch the
-  // print's own axes independently — the printed repeat is rarely a
-  // perfect square, and the corners must stay free for keystone alone.
-  // Identity trim reproduces the old top-left letterbox exactly
-  // (center pivot + center position). calGrid follows the trim; calRef
-  // deliberately does not — its crosshairs are the camera's fixed
-  // reference.
+  // the projected lattice sits on the printed one. Identity trim
+  // reproduces the old top-left letterbox exactly (center pivot +
+  // center position). calGrid follows the trim; calRef deliberately
+  // does not — its crosshairs are the camera's fixed reference.
   function fit() {
     const s0 = Math.min(app.screen.width / WALL, app.screen.height / WALL);
     const s = s0 * proj.trim.scale;
     world.pivot.set(WALL / 2, WALL / 2);
     world.rotation = proj.trim.rot;
-    world.scale.set(s * proj.trim.sx, s * proj.trim.sy);
+    world.scale.set(s);
     world.position.set(
       app.screen.width / 2 + proj.trim.dx * s0,
       app.screen.height / 2 + proj.trim.dy * s0,
@@ -2903,7 +2896,7 @@ fn mainFragment(
     if (calGrid) {
       calGrid.pivot.set(WALL / 2, WALL / 2);
       calGrid.rotation = proj.trim.rot;
-      calGrid.scale.copyFrom(world.scale);
+      calGrid.scale.set(s);
       calGrid.position.copyFrom(world.position);
     }
     if (calRef) {
@@ -3171,7 +3164,9 @@ fn mainFragment(
     season.target = name;
     season.fade = 0;
     const tex = name === 'none' ? tileTexture : tileSeason[name];
-    for (const s of tileFade) { s.texture = tex; s.visible = true; s.alpha = 0; }
+    for (const s of tileFade) {
+      s.texture = tex; s.visible = !proj.light; s.alpha = 0;
+    }
   }
   function castTextures(member, name) {
     return name === 'none' ? member.textures : (member.seasonTex[name] || member.textures);
@@ -5400,12 +5395,8 @@ fn mainFragment(
         const ey = at.y - trimDrag.wy;
         const cosr = Math.cos(proj.trim.rot);
         const sinr = Math.sin(proj.trim.rot);
-        // Scale per-axis BEFORE rotating: PIXI applies scale in the
-        // print's local frame, and sx/sy make that order observable.
-        const gx = ex * proj.trim.scale * proj.trim.sx;
-        const gy = ey * proj.trim.scale * proj.trim.sy;
-        proj.trim.dx += cosr * gx - sinr * gy;
-        proj.trim.dy += sinr * gx + cosr * gy;
+        proj.trim.dx += (cosr * ex - sinr * ey) * proj.trim.scale;
+        proj.trim.dy += (sinr * ex + cosr * ey) * proj.trim.scale;
         fit();
         calTouched();
       }
@@ -5442,15 +5433,7 @@ fn mainFragment(
   wrap.addEventListener('wheel', (e) => {
     if (!proj.cal) return;
     e.preventDefault();
-    if (e.shiftKey) {
-      // Tile aspect, one axis at a time: the corner quad fixes the
-      // wall, this fixes a printed repeat that isn't square. Shift
-      // turns the wheel sideways in most browsers — read either axis.
-      const dy = e.deltaY || e.deltaX;
-      const key = e.altKey ? 'sy' : 'sx';
-      proj.trim[key] = Math.max(0.8, Math.min(1.25,
-        proj.trim[key] * Math.exp(-dy * 0.0004)));
-    } else if (e.altKey) {
+    if (e.altKey) {
       proj.trim.rot = Math.max(-0.07, Math.min(0.07,
         proj.trim.rot - e.deltaY * 0.00006));
     } else {
@@ -5491,35 +5474,19 @@ fn mainFragment(
   const CAL_KEY = 'wallCal.v1';
   const handleEls = [...document.querySelectorAll('.cal-handle')];
   const fspill = document.getElementById('fspill');
-  const exitpill = document.getElementById('exitpill');
   let calSaveTimer = 0;
   function calSave() {
     clearTimeout(calSaveTimer);
     calSaveTimer = setTimeout(() => {
       try {
         localStorage.setItem(CAL_KEY, JSON.stringify(
-          { v: 1, on: proj.on, corners: proj.corners, trim: proj.trim }));
+          { v: 1, on: proj.on, corners: proj.corners, trim: proj.trim,
+            light: proj.light }));
       } catch (err) { /* ephemeral storage: Copy cal is the insurance */ }
     }, 300);
   }
-  // The starting quad matches the WALL's aspect (the letterboxed
-  // square inscribed in the window), not the window's: corners at the
-  // window corners stretched the square print to the projector's
-  // 16:9/16:10 the moment Project was hit, and parked every handle
-  // three-quarters off screen. From here the projection starts
-  // undistorted and the corners only ever add real keystone.
-  function defaultCorners() {
-    const w = wrap.clientWidth || 1;
-    const h = wrap.clientHeight || 1;
-    const ix = Math.min(w, h) / (2 * w);
-    const iy = Math.min(w, h) / (2 * h);
-    return [
-      [0.5 - ix, 0.5 - iy], [0.5 + ix, 0.5 - iy],
-      [0.5 + ix, 0.5 + iy], [0.5 - ix, 0.5 + iy],
-    ];
-  }
   function ensureCorners() {
-    if (!proj.corners) proj.corners = defaultCorners();
+    if (!proj.corners) proj.corners = [[0, 0], [1, 0], [1, 1], [0, 1]];
   }
   function calLoad() {
     let p = null;
@@ -5530,9 +5497,9 @@ fn mainFragment(
     if (Array.isArray(p.corners) && p.corners.length === 4) {
       proj.corners = p.corners;
     }
-    if (p.trim) {
-      proj.trim = { dx: 0, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1, ...p.trim };
-    }
+    if (p.trim) proj.trim = { dx: 0, dy: 0, scale: 1, rot: 0, ...p.trim };
+    proj.light = p.light === true;
+    applyLightOnly();
     fit();
     // Fullscreen needs a user gesture; the pill offers it.
     if (p.on) enterProjection(false);
@@ -5616,8 +5583,6 @@ fn mainFragment(
     set('trimdy', +proj.trim.dy.toFixed(1));
     set('trimscale', +proj.trim.scale.toFixed(4));
     set('trimrot', +(proj.trim.rot * 180 / Math.PI).toFixed(2));
-    set('trimsx', +proj.trim.sx.toFixed(4));
-    set('trimsy', +proj.trim.sy.toFixed(4));
     const tog = (id, on) => {
       const el = document.getElementById(id);
       if (el) el.classList.toggle('on', !!on);
@@ -5629,13 +5594,6 @@ fn mainFragment(
   function updateFsPill() {
     fspill.style.display = proj.on && !document.fullscreenElement
       && document.fullscreenEnabled ? 'block' : 'none';
-    // The way back out: projecting hides the whole control surface, so
-    // without this pill (and Esc) a saved-on calibration reboots into a
-    // wall with no UI at all. Hidden in fullscreen — the venue wall
-    // must stay dark — but the browser's own Esc leaves fullscreen
-    // first, which reveals it.
-    exitpill.style.display = proj.on && !document.fullscreenElement
-      ? 'block' : 'none';
   }
   function calTouched() {
     calSave();
@@ -5700,6 +5658,31 @@ fn mainFragment(
     queueStageResize();
     calTouched();
   }
+  function castVisible(member, enabled) {
+    member.group.visible = enabled && !proj.light;
+  }
+  function applyLightOnly() {
+    // The field-test pivot, as a switch: on the REAL wall the print
+    // supplies the pigment, so the projector emits the LIGHT FIELD
+    // alone - black where the wall is left alone, light where the
+    // critters, rain, glow and sweep live. The sim keeps every
+    // collision and anchor (member.enabled untouched); only pixels
+    // change.
+    for (const s of tileBase) s.visible = !proj.light;
+    for (const s of tileFade) {
+      s.visible = !proj.light && season.target !== null;
+    }
+    for (const member of members) {
+      const box = document.querySelector(
+        `#castgroup input[data-member="${member.name}"]`);
+      castVisible(member, box ? box.checked : member.enabled);
+    }
+    lightSprite.blendMode = (proj.light
+      || location.hash.includes('RAWLIGHT')) ? 'normal' : 'multiply';
+    app.renderer.background.color = proj.light ? 0x000000 : 0x0a0d0b;
+    const btn = document.getElementById('projlight');
+    if (btn) btn.classList.toggle('on', proj.light);
+  }
   function applySnapResult(r) {
     proj.trim.dx = r.dx;
     proj.trim.dy = r.dy;
@@ -5711,6 +5694,11 @@ fn mainFragment(
     if (typeof msg.grid === 'boolean') proj.grid = msg.grid;
     if (typeof msg.flood === 'boolean') proj.flood = msg.flood;
     if (typeof msg.blink === 'boolean') proj.blink = msg.blink;
+    if (typeof msg.light === 'boolean') {
+      proj.light = msg.light;
+      applyLightOnly();
+      calSave();
+    }
     syncOverlays();
     syncCalPanel();
     sendCalState();
@@ -5742,13 +5730,6 @@ fn mainFragment(
     });
   });
   document.addEventListener('keydown', (e) => {
-    // Esc always retreats one level: calibrate -> projecting -> the
-    // normal page. It used to work only in calibrate mode, which left
-    // plain projection inescapable from the keyboard.
-    if (e.key === 'Escape' && proj.on && !proj.cal) {
-      exitProjection();
-      return;
-    }
     if (!proj.cal) return;
     const tag = (document.activeElement && document.activeElement.tagName) || '';
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
@@ -5776,7 +5757,6 @@ fn mainFragment(
   fspill.addEventListener('click', () => {
     wrap.requestFullscreen().catch(() => {});
   });
-  exitpill.addEventListener('click', () => exitProjection());
   // Resizes re-derive the pixel quad from the stored fractions.
   app.renderer.on('resize', () => {
     requestAnimationFrame(() => {
@@ -5794,7 +5774,7 @@ fn mainFragment(
     calBus.postMessage({
       type: 'state', corners: proj.corners, trim: proj.trim,
       on: proj.on, cal: proj.cal, grid: proj.grid,
-      flood: proj.flood, blink: proj.blink,
+      flood: proj.flood, blink: proj.blink, light: proj.light,
     });
   }
   if (calBus) {
@@ -5822,6 +5802,7 @@ fn mainFragment(
     };
     on('projgo', () => (proj.on ? exitProjection() : enterProjection()));
     on('projcal', () => setCal(!proj.cal));
+    on('projlight', () => setFlags({ light: !proj.light }));
     on('projpop', () => {
       window.open(`${location.href.split('#')[0]}#OPERATOR`, 'wallOperator',
         'width=460,height=860');
@@ -5830,8 +5811,8 @@ fn mainFragment(
     on('calflood', () => setFlags({ flood: !proj.flood }));
     on('calblink', () => setFlags({ blink: !proj.blink }));
     on('calreset', () => {
-      proj.corners = defaultCorners();
-      proj.trim = { dx: 0, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1 };
+      proj.corners = [[0, 0], [1, 0], [1, 1], [0, 1]];
+      proj.trim = { dx: 0, dy: 0, scale: 1, rot: 0 };
       fit();
       applyWarp();
       calTouched();
@@ -5851,32 +5832,12 @@ fn mainFragment(
         if (Array.isArray(p.corners) && p.corners.length === 4) {
           proj.corners = p.corners;
         }
-        if (p.trim) {
-          proj.trim = { dx: 0, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1, ...p.trim };
-        }
+        if (p.trim) proj.trim = { dx: 0, dy: 0, scale: 1, rot: 0, ...p.trim };
         fit();
         applyWarp();
         calTouched();
       } catch (err) { /* not a calibration string */ }
     });
-    // The trim readouts accept typed values too — the syncCalPanel
-    // guard already leaves a focused field alone for exactly this.
-    for (const [id, key, conv] of [
-      ['trimdx', 'dx', 1], ['trimdy', 'dy', 1],
-      ['trimscale', 'scale', 1], ['trimrot', 'rot', Math.PI / 180],
-      ['trimsx', 'sx', 1], ['trimsy', 'sy', 1],
-    ]) {
-      const el = document.getElementById(id);
-      if (el) {
-        el.addEventListener('change', () => {
-          const v = Number(el.value);
-          if (!Number.isFinite(v)) { syncCalPanel(); return; }
-          proj.trim = { ...proj.trim, [key]: v * conv };
-          fit();
-          calTouched();
-        });
-      }
-    }
     let rig = null;
     const camPanel = document.getElementById('campanel');
     const ensureRig = () => {
@@ -6263,8 +6224,8 @@ fn mainFragment(
     }
     const bus = new BroadcastChannel('wallCal');
     const state = {
-      trim: { dx: 0, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1 },
-      grid: false, flood: false, blink: false, on: false,
+      trim: { dx: 0, dy: 0, scale: 1, rot: 0 },
+      grid: false, flood: false, blink: false, light: false, on: false,
     };
     let linked = false;
     let active = 0;
@@ -6277,11 +6238,10 @@ fn mainFragment(
       set('opdy', +state.trim.dy.toFixed(1));
       set('opscale', +state.trim.scale.toFixed(4));
       set('oprot', +(state.trim.rot * 180 / Math.PI).toFixed(2));
-      set('opsx', +(state.trim.sx ?? 1).toFixed(4));
-      set('opsy', +(state.trim.sy ?? 1).toFixed(4));
       $id('opgrid').classList.toggle('on', state.grid);
       $id('opflood').classList.toggle('on', state.flood);
       $id('opblink').classList.toggle('on', state.blink);
+      $id('oplight').classList.toggle('on', state.light);
       $id('openter').classList.toggle('on', state.on);
       [...$id('opcornersel').querySelectorAll('button')].forEach((b) => {
         b.classList.toggle('on', Number(b.dataset.c) === active);
@@ -6292,7 +6252,7 @@ fn mainFragment(
       if (m.type === 'state') {
         Object.assign(state, {
           trim: m.trim, grid: m.grid, flood: m.flood,
-          blink: m.blink, on: m.on,
+          blink: m.blink, light: m.light, on: m.on,
         });
         linked = true;
         link.textContent = 'linked to the wall';
@@ -6308,7 +6268,6 @@ fn mainFragment(
     for (const [id, key, conv] of [
       ['opdx', 'dx', 1], ['opdy', 'dy', 1],
       ['opscale', 'scale', 1], ['oprot', 'rot', Math.PI / 180],
-      ['opsx', 'sx', 1], ['opsy', 'sy', 1],
     ]) {
       $id(id).addEventListener('change', () => {
         state.trim = { ...state.trim, [key]: Number($id(id).value) * conv };
@@ -6335,6 +6294,8 @@ fn mainFragment(
       () => bus.postMessage({ type: 'flags', flood: !state.flood }));
     $id('opblink').addEventListener('click',
       () => bus.postMessage({ type: 'flags', blink: !state.blink }));
+    $id('oplight').addEventListener('click',
+      () => bus.postMessage({ type: 'flags', light: !state.light }));
     $id('openter').addEventListener('click',
       () => bus.postMessage({ type: 'enter' }));
     $id('opexit').addEventListener('click',
@@ -6372,7 +6333,7 @@ fn mainFragment(
     box.dataset.member = member.name;
     box.addEventListener('change', () => {
       member.enabled = box.checked;
-      member.group.visible = box.checked;
+      castVisible(member, box.checked);
       // The collision wall changes with the cast: a hidden flower must not
       // catch invisible rain.
       rebuildFields();
@@ -6535,7 +6496,8 @@ fn mainFragment(
   const bootName = rawHash
     .replace(/(?:^|&)p=[A-Za-z0-9_-]+/, '')
     .replace('RAWLIGHT', '').replace('RIPPLE', '').replace('PANEQA', '')
-    .replace('OPERATOR', '').replace('CALQA', '').replace('CAL', '')
+    .replace('OPERATOR', '').replace('CALQA', '').replace('LIGHTQA', '')
+    .replace('CAL', '')
     .replace(/^&+|&+$/g, '');
   const bootScene = SCENES[bootName] ? bootName : 'noon';
   // QA affordance: '&RIPPLE' keeps one ripple alive so headless
@@ -6657,7 +6619,7 @@ fn mainFragment(
         const member = members.find((m) => m.name === box.dataset.member);
         if (member) {
           member.enabled = want;
-          member.group.visible = want;
+          castVisible(member, want);
         }
         castsChanged = true;
       }
@@ -6754,7 +6716,7 @@ fn mainFragment(
   // otherwise the saved venue calibration loads.
   if (location.hash.includes('CALQA')) {
     proj.corners = [[0.08, 0.05], [0.97, 0.09], [0.93, 0.94], [0.04, 0.9]];
-    proj.trim = { dx: 40, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1 };
+    proj.trim = { dx: 40, dy: 0, scale: 1, rot: 0 };
     proj.grid = true;
     fit();
     enterProjection(false);
@@ -6764,6 +6726,11 @@ fn mainFragment(
     setCal(true);
   } else {
     calLoad();
+  }
+  // QA affordance: '#LIGHTQA' boots straight into light-only output.
+  if (location.hash.includes('LIGHTQA')) {
+    proj.light = true;
+    applyLightOnly();
   }
   // Boot straight INTO the scene: the dials start at their targets
   // rather than easing from noon.
