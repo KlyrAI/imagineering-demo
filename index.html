@@ -208,6 +208,18 @@
     border: 1px solid var(--edge); border-radius: 3px; font-size: 11.5px;
     padding: 2px 4px;
   }
+  #facepanel {
+    position: absolute; top: 10px; left: 10px; z-index: 71; width: 300px;
+    background: rgba(10, 13, 11, 0.93); border: 1px solid var(--edge);
+    border-radius: 8px; padding: 10px 12px; display: none;
+    font-size: 12px; color: var(--ink); user-select: none;
+  }
+  #facepanel .row2 { display: flex; gap: 6px; align-items: center; margin: 5px 0; }
+  #facepanel button {
+    background: #1c231e; border: 1px solid var(--edge); color: var(--ink);
+    border-radius: 4px; font-size: 11.5px; padding: 3px 7px; cursor: pointer;
+  }
+  body.faces .hint { display: none; }
   #campanel {
     position: absolute; top: 10px; right: 10px; z-index: 70; width: 372px;
     background: rgba(10, 13, 11, 0.96); border: 1px solid var(--edge);
@@ -499,9 +511,24 @@
         <b>The print holds still.</b> Field-tested: the flowers do not need
         to move &mdash; they are printed on the wall. The critters, the
         rain, the glow and the sweep are the experience, and every one of
-        them still knows exactly where the flowers are: the wallkit&rsquo;s
-        anchors steer the visitors, and the depth weave slips particles
-        behind the printed blooms through the paper mask.
+        them still knows exactly where the flowers are: the faces steer
+        the visitors, and the depth weave slips particles behind the
+        printed blooms through the paper mask.
+      </p>
+      <p class="note">
+        <b>Every flower has a face.</b> The printed heads are not
+        orthogonal &mdash; each tips toward its own direction and is
+        foreshortened by its tilt &mdash; so every one carries a face:
+        center, radius, facing and tilt, kind and color. A critter lands
+        on a site laid in that flower&rsquo;s own plane &mdash; on the
+        rays, the pad or the near lip, never the pistil &mdash; lies
+        along it, head to the center, and its wings fold up toward the
+        flower&rsquo;s normal: closed wings vanish to a line on a face-on
+        bloom and stand up in full profile on a cup seen from the side.
+        Butterflies take the pinks and the whites alike and pump their
+        wings half-open as they feed; moths settle flat and keep to the
+        pale night flowers. Buds have nowhere to land. <b>#FLOWERS</b>
+        opens the editor to tune the faces on the wall.
       </p>
       <p class="note">
         <b>Rain knows the print.</b> The wall&rsquo;s silhouette ships as a
@@ -3127,6 +3154,8 @@ fn mainFragment(
           SPECIES, legacyCommands, visitorCommands, steerCommands,
           wingVariant, instanceParams, vsaltG,
           SIM_DT, SIM_HZ, PERCHING, createFlock, stepFlock, flockPose,
+          PERCH_PREFS, faceBasis, faceSites, siteNeighbors, perchFrame,
+          wingColumns,
           injectDisturbance, createMotes, stepMotes, moteBrightness,
           moteDepth, createFireflies, stepFireflies, fireflyBrightness,
           fireflyDepth,
@@ -3619,8 +3648,52 @@ fn mainFragment(
     return pool[index];
   }
   const VIS_SEED = 0xbeef11;
-  const anchorList = (DATA.anchors?.anchors || []).map((a) => [a.x, a.y]);
-  const neighborList = DATA.anchors?.neighbors || [];
+  // ---- every flower has a face ----------------------------------------
+  // The printed flowers are not orthogonal: each head tips toward some
+  // direction and is foreshortened by its tilt. faces.json (hand-authored
+  // against the tile, tunable live with #FLOWERS) is that orientation:
+  // center, radius, facing, k = cos(tilt), kind, color. The critters
+  // land on SITES laid in each flower's plane - on the rays, the pad or
+  // the near lip, never the pistil - and each species keeps to the
+  // flowers it would visit in nature: butterflies take pinks and whites
+  // alike, moths the pale night flowers only. The steered engine is fed
+  // these sites as its anchors and stays byte-identical.
+  const SHIPPED_FACES = (DATA.faces?.faces || []).map((f) => ({ ...f }));
+  let FACES = SHIPPED_FACES.map((f) => ({ ...f }));
+  const perchSites = {};
+  const perchNeighbors = {};
+  let faceCenters = [];
+  function onPaint(x, y) {
+    // Three-by-three sample: a site must sit on printed paint (the
+    // wallkit's own gate, kept here so an edited face cannot land a
+    // critter on paper).
+    for (let dy = -2; dy <= 2; dy += 2) {
+      for (let dx = -2; dx <= 2; dx += 2) {
+        const ix = ((Math.round(x + dx) % TILE) + TILE) % TILE;
+        const iy = ((Math.round(y + dy) % TILE) + TILE) % TILE;
+        if (printMask[iy * TILE + ix]) return true;
+      }
+    }
+    return false;
+  }
+  function rebuildSites() {
+    let dropped = 0;
+    for (const key of ['monarch', 'meadow', 'moth']) {
+      const all = faceSites(FACES, VIS_SEED, PERCH_PREFS[key], TILE);
+      const kept = all.filter((site) => onPaint(site.x, site.y));
+      dropped += all.length - kept.length;
+      perchSites[key] = kept;
+      perchNeighbors[key] = siteNeighbors(kept, TILE, 4);
+    }
+    faceCenters = FACES.map((f) => [f.x, f.y]);
+    if (dropped) console.info(`faces: ${dropped} site(s) off paint dropped`);
+  }
+  rebuildSites();
+  // The legacy closed-form visitors (count 0 in every scene) and the
+  // dust orbit still want a plain point list: the face centers.
+  const anchorList = faceCenters;
+  const neighborList = siteNeighbors(
+    faceCenters.map((c, i) => ({ x: c[0], y: c[1], face: i })), TILE, 4);
   const FLOCK = [
     { species: 'mote', settings: MOTE, count: 3, color: 0xfff4d6 },
     // Firefly counts feed the dedicated lantern lane below, not the
@@ -3653,11 +3726,15 @@ fn mainFragment(
     for (let ty = 0; ty < GRID; ty++) {
       for (let tx = 0; tx < GRID; tx++) {
         const spotIndex = ty * GRID + tx;
-        const specs = [];
+        // One sim per SPECIES per spot: each flies its own site list
+        // (its flowers, its landing spots) with its own claims table.
+        // Member salts run over the whole mix as before.
+        const sims = [];
         let member = 0;
         for (const key of STEERED) {
           const flock = FLOCK.find((f) => f.species === key);
           const count = Math.floor((flock ? flock.count : 0) * densityDial + 0.5);
+          const specs = [];
           for (let v = 0; v < count; v++) {
             specs.push({
               key,
@@ -3665,10 +3742,16 @@ fn mainFragment(
             });
             member++;
           }
+          const sites = perchSites[key] || [];
+          if (specs.length && sites.length) {
+            sims.push({
+              key,
+              sim: createFlock(VIS_SEED, sites.map((p) => [p.x, p.y]),
+                               perchNeighbors[key], specs),
+            });
+          }
         }
-        steerSims.push(specs.length && anchorList.length
-          ? { sim: createFlock(VIS_SEED, anchorList, neighborList, specs) }
-          : null);
+        steerSims.push(sims.length ? sims : null);
         const dustN = Math.floor(dustCount * dustDial + 0.5);
         dustSims.push(dustN > 0
           ? createMotes(VIS_SEED, spotIndex, dustN, TILE)
@@ -3707,10 +3790,12 @@ fn mainFragment(
   function disturbAt(x, y) {
     for (let ty = 0; ty < GRID; ty++) {
       for (let tx = 0; tx < GRID; tx++) {
-        const entry = steerSims[ty * GRID + tx];
-        if (!entry) continue;
-        injectDisturbance(entry.sim, x - tx * TILE, y - ty * TILE,
-                          entry.sim.n / SIM_HZ);
+        const entries = steerSims[ty * GRID + tx];
+        if (!entries) continue;
+        for (const entry of entries) {
+          injectDisturbance(entry.sim, x - tx * TILE, y - ty * TILE,
+                            entry.sim.n / SIM_HZ);
+        }
       }
     }
   }
@@ -3730,12 +3815,28 @@ fn mainFragment(
         // (ca, sa); the sprite's head is up, so rotate +90deg past
         // the heading angle.
         sprite.anchor.set(c.half === 'L' ? 1 : 0, 0.5);
-        sprite.position.set(c.x + dx, c.y + dy);
-        sprite.rotation = Math.atan2(c.sa, c.ca) + Math.PI / 2;
         const sc = (c.size * 2.3) / 256;
         // WING_WIDE 1.45, the server stamp's twin: the spread must
         // beat the body length or the creature reads narrow.
-        sprite.scale.set(sc * Math.max(0.05, c.fold) * 1.45, sc);
+        // Flight is the old rotation + fold x-scale, written as the
+        // affine it always was: local +x (the wing's spread) lands on
+        // the heading's right-perp, local +y (the tail) on -heading.
+        const scX = sc * Math.max(0.05, c.fold) * 1.45;
+        let ma = -c.sa * scX, mb = c.ca * scX;
+        let mc = -c.ca * sc, md = -c.sa * sc;
+        if (c.perch) {
+          // Perched: the half lies in the FLOWER'S plane, folded up by
+          // alpha about the body axis (perch.ts), blended in by the
+          // sim's own rest ramp so touchdown and takeoff stay C0.
+          const p = c.perch;
+          const scP = sc * 1.45;
+          const r = p.rest;
+          ma += (p.ax * scP - ma) * r;
+          mb += (p.ay * scP - mb) * r;
+          mc += (-p.bx * sc - mc) * r;
+          md += (-p.by * sc - md) * r;
+        }
+        sprite.setFromMatrix(new PIXI.Matrix(ma, mb, mc, md, c.x + dx, c.y + dy));
         sprite.alpha = c.dim ? Math.min(1, c.alpha)
                              : Math.min(1, c.alpha * 0.85);
         continue;
@@ -3759,9 +3860,34 @@ fn mainFragment(
     }
   }
 
-  // Visitors land WITH weight: the moment a steered member enters its
-  // perching state, the nearest petal takes the arrival as a push at its
-  // lever — the wall's ecosystem touching itself.
+  // The perched wing fold per species, degrees at the perch fan's
+  // closed (openness 0.35) and open (0.75) ends. Butterflies feed with
+  // wings closed or half-open and pump them slowly; moths settle flat
+  // or tented (the field guides' first rule for telling them apart).
+  const PERCH_FOLD = { monarch: [85, 25], meadow: [85, 25], moth: [25, 5] };
+  // Fold the wing commands of a settling member into its flower's
+  // plane: body toward the head center along the projected radial,
+  // wings raised about it toward the projected normal. The sim's rest
+  // ramp is the blend, so a landing tilts in and a takeoff tilts out.
+  function perchCmds(cmds, key, member, pose) {
+    const site = (perchSites[key] || [])[member.target];
+    if (!site) return;
+    const face = FACES[site.face];
+    if (!face) return;
+    // The perched sway: sake's landed drift, in the flower's plane.
+    const sway = Math.sin(member.hold * SIM_DT * 0.7) * 0.12;
+    const frame = perchFrame(face, site, sway);
+    const fold = PERCH_FOLD[key] || PERCH_FOLD.meadow;
+    const u = Math.max(0, Math.min(1, (pose.openness - 0.35) / 0.4));
+    const alpha = (fold[0] + (fold[1] - fold[0]) * u) * Math.PI / 180;
+    for (const c of cmds) {
+      if (c.op !== 'wing') continue;
+      const cols = wingColumns(frame, alpha, c.half);
+      c.perch = { ax: cols.ax, ay: cols.ay, bx: cols.bx, by: cols.by,
+                  rest: member.rest };
+    }
+  }
+
   function drawVisitors() {
     visitorInk.clear();
     visitorDim.clear();
@@ -3814,11 +3940,12 @@ fn mainFragment(
         // wears a fresh individual); lum is the scene's glow-in-the-
         // dark dial — above 1.5 the night wing pools take over and the
         // halo appears.
-        const entry = steerSims[spotIndex];
-        if (entry) {
+        const entries = steerSims[spotIndex] || [];
+        for (const entry of entries) {
           for (let i = 0; i < entry.sim.specs.length; i++) {
             const spec = entry.sim.specs[i];
             const pose = flockPose(entry.sim, i);
+            const member = entry.sim.members[i];
             const tint = hexTriple(visitorTheme.tint[spec.key]);
             // The species glow: one gradient sprite behind the body —
             // amber for butterflies, moonlit blue for the moth — sized
@@ -3837,11 +3964,13 @@ fn mainFragment(
               glow.alpha = (0.3 + 0.25 * pose.openness) * pose.alpha
                 * Math.min(1, visitorGain * 1.25);
             }
-            playCmds(steerCommands(
+            const cmds = steerCommands(
               spec.key, pose, VIS_SEED, spec.vsalt, ox, oy, 1,
               style, tint, visitorGain, sizeJitter, visitorTheme.size,
               sizeFloor, wingNames, lum,
-            ), 0, 0);
+            );
+            if (member.rest > 0.002) perchCmds(cmds, entry.key, member, pose);
+            playCmds(cmds, 0, 0);
           }
         }
         // Sake-house dust, now woven through depth: behind-layer motes
@@ -4366,40 +4495,62 @@ fn mainFragment(
     return out;
   }
   // The perch wire: a steered visitor entering PERCHING is a landing on
-  // its target anchor; the anchor names the bloom; the reaction paints
-  // it. Detected here, on the state edge - the sim emits nothing.
+  // its target SITE (a point on the flower's own petals, per species);
+  // the recolor label map under that site names the bloom; the reaction
+  // paints it. Detected here, on the state edge - the sim emits nothing.
   function pollPerches() {
     for (let sIdx = 0; sIdx < steerSims.length; sIdx++) {
-      const entry = steerSims[sIdx];
-      if (!entry) continue;
-      const sim = entry.sim;
-      if (!entry.prevState || entry.prevState.length !== sim.members.length) {
-        entry.prevState = sim.members.map((m) => m.state);
-        entry.perchAt = sim.members.map(() => -1);
-        continue;
-      }
-      for (let i = 0; i < sim.members.length; i++) {
-        const st = sim.members[i].state;
-        const was = entry.prevState[i];
-        if (st === PERCHING && was !== PERCHING) {
-          entry.perchAt[i] = sim.members[i].target;
-          onPerch(sIdx, sim.members[i].target, sim.specs[i].key);
-        } else if (was === PERCHING && st !== PERCHING) {
-          onTakeoff(sIdx, entry.perchAt[i]);
-          entry.perchAt[i] = -1;
+      const entries = steerSims[sIdx];
+      if (!entries) continue;
+      for (const entry of entries) {
+        const sim = entry.sim;
+        if (!entry.prevState || entry.prevState.length !== sim.members.length) {
+          entry.prevState = sim.members.map((m) => m.state);
+          entry.perchAt = sim.members.map(() => -1);
+          continue;
         }
-        entry.prevState[i] = st;
+        for (let i = 0; i < sim.members.length; i++) {
+          const st = sim.members[i].state;
+          const was = entry.prevState[i];
+          if (st === PERCHING && was !== PERCHING) {
+            entry.perchAt[i] = sim.members[i].target;
+            onPerch(sIdx, entry.key, sim.members[i].target);
+          } else if (was === PERCHING && st !== PERCHING) {
+            onTakeoff(sIdx, entry.key, entry.perchAt[i]);
+            entry.perchAt[i] = -1;
+          }
+          entry.prevState[i] = st;
+        }
       }
     }
   }
-  function onPerch(tile, anchorIdx, species) {
-    const f = flowerByAnchor.get(anchorIdx);
+  // A landing site names its bloom through the label map (the site sits
+  // on paint by the gate); failing that, the nearest bloom to the face.
+  function siteBloom(key, siteIdx) {
+    const site = (perchSites[key] || [])[siteIdx];
+    if (!site) return null;
+    const lx = ((Math.floor(site.x) % TILE) + TILE) % TILE;
+    const ly = ((Math.floor(site.y) % TILE) + TILE) % TILE;
+    const id = flowerMap[ly * TILE + lx];
+    let f = id ? flowerById.get(id) : null;
+    if (!f) {
+      const face = FACES[site.face];
+      let bestD = 140;
+      for (const cand of FLOWERS) {
+        const d = face ? faceGap(face.x, face.y, cand.cx, cand.cy) : Infinity;
+        if (d < bestD) { bestD = d; f = cand; }
+      }
+    }
+    return f ? { site, f } : null;
+  }
+  function onPerch(tile, species, siteIdx) {
+    const hit = siteBloom(species, siteIdx);
     const re = rcReactions.perch;
-    if (!f || !re || re.mode === 'none') return;
+    if (!hit || !re || re.mode === 'none') return;
+    const f = hit.f;
     const look = re.look || DEFAULT_LOOK;
-    const a = anchorList[anchorIdx];
     const tx = tile % GRID, ty = Math.floor(tile / GRID);
-    const from = a ? [tx * TILE + a[0], ty * TILE + a[1]] : null;
+    const from = [tx * TILE + hit.site.x, ty * TILE + hit.site.y];
     const ref = { tile, id: f.id };
     if (re.mode === 'pulse') {
       recolor.pulse(ref, look, { attack: 0.35, hold: 2.2, release: 1.6 });
@@ -4409,10 +4560,10 @@ fn mainFragment(
       recolor.reveal(ref, look, { from, speed: 140, hold: 5, release: 2 });
     }
   }
-  function onTakeoff(tile, anchorIdx) {
-    const f = flowerByAnchor.get(anchorIdx);
-    if (!f) return;
-    recolor.release({ tile, id: f.id });
+  function onTakeoff(tile, species, siteIdx) {
+    const hit = siteBloom(species, siteIdx);
+    if (!hit) return;
+    recolor.release({ tile, id: hit.f.id });
   }
   window.recolor = recolor;
   const sweepRad = DEFAULT_SWEEP.angleDeg * Math.PI / 180;
@@ -5258,8 +5409,9 @@ fn mainFragment(
       ];
       for (let n = 0; n < steerSteps; n++) {
         for (let sIdx = 0; sIdx < steerSims.length; sIdx++) {
-          const entry = steerSims[sIdx];
-          if (entry) stepFlock(entry.sim);
+          const entries = steerSims[sIdx];
+          if (!entries) continue;
+          for (const entry of entries) stepFlock(entry.sim);
         }
         pollPerches();
         for (let sIdx = 0; sIdx < dustSims.length; sIdx++) {
@@ -5274,8 +5426,8 @@ fn mainFragment(
           // The dust ORBITS the blooms (sake's beckon aimed at the
           // wallkit anchors) while it streams with the air.
           stepMotes(dust, pull, dustFlow,
-                    anchorList.length
-                      ? { anchors: anchorList, strength: 0.5 }
+                    faceCenters.length
+                      ? { anchors: faceCenters, strength: 0.5 }
                       : undefined);
         }
         for (const flies of fireflySims) {
@@ -5339,6 +5491,7 @@ fn mainFragment(
     drawTrace();
     drawRipples();
     drawVisitors();
+    if (facesEd.on) drawFacesEd();
 
     // The rain, drawn as water. Falling drops are graduated streaks
     // with a hot head, alpha breathing through slow spatial curtains
@@ -5656,6 +5809,262 @@ fn mainFragment(
     const local = world.toLocal(new PIXI.Point(cx, cy));
     return { x: local.x, y: local.y };
   }
+  // ---- the faces editor (#FLOWERS) --------------------------------------
+  // Every face drawn on the first tile as its projected ellipse, its
+  // facing arrow (length sin(tilt) * r) and its landing sites; drag the
+  // center, the rim handle or the arrow tip, cycle kind/color with keys,
+  // copy the JSON back into assets/wallkit/faces.json. The sim keeps
+  // running so the landings show live while you tune.
+  const facesEd = {
+    on: false, sel: -1, drag: null, last: { x: 512, y: 512 },
+    gfx: new PIXI.Graphics(), labels: [], panel: null,
+  };
+  facesEd.gfx.visible = false;
+  world.addChild(facesEd.gfx);
+  const FACE_KINDS = ['disc', 'cluster', 'cup', 'bud'];
+  function faceTile(p) {
+    return { x: ((p.x % TILE) + TILE) % TILE, y: ((p.y % TILE) + TILE) % TILE };
+  }
+  function faceGap(ax, ay, bx, by) {
+    let dx = Math.abs(ax - bx), dy = Math.abs(ay - by);
+    dx = Math.min(dx, TILE - dx); dy = Math.min(dy, TILE - dy);
+    return Math.hypot(dx, dy);
+  }
+  function faceHandles(f) {
+    const b = faceBasis(f);
+    const sin = Math.sqrt(Math.max(0, 1 - b.k * b.k));
+    return {
+      rim: { x: f.x + b.e1x * f.r, y: f.y + b.e1y * f.r },
+      tip: { x: f.x + b.fx * sin * f.r, y: f.y + b.fy * sin * f.r },
+    };
+  }
+  function facesChanged(restart = true) {
+    rebuildSites();
+    if (restart) rebuildSteer();
+    try { localStorage.setItem('faces.v1', JSON.stringify({ tile: TILE, faces: FACES })); }
+    catch (err) { /* private mode */ }
+    facesNote();
+  }
+  function facesNote() {
+    if (!facesEd.panel) return;
+    const f = FACES[facesEd.sel];
+    const box = facesEd.panel.querySelector('#facesel');
+    if (!f) {
+      box.textContent = `${FACES.length} faces. Click one to select; N adds a face at the pointer.`;
+      return;
+    }
+    box.textContent = `${f.id}: (${Math.round(f.x)}, ${Math.round(f.y)}) r ${Math.round(f.r)}`
+      + ` face (${f.fx.toFixed(2)}, ${f.fy.toFixed(2)}) k ${f.k.toFixed(2)}`
+      + ` ${f.kind} ${f.color}`;
+  }
+  function drawFacesEd() {
+    const g = facesEd.gfx;
+    g.clear();
+    if (!facesEd.on) return;
+    for (let i = 0; i < FACES.length; i++) {
+      const f = FACES[i];
+      const b = faceBasis(f);
+      const sel = i === facesEd.sel;
+      const col = f.color === 'pink' ? 0xff7aa8 : 0xffffff;
+      // The projected disc: r along e1, k*r along f.
+      for (let s = 0; s <= 40; s++) {
+        const t = (s / 40) * Math.PI * 2;
+        const px = f.x + (Math.cos(t) * b.e1x + Math.sin(t) * b.e2x) * f.r;
+        const py = f.y + (Math.cos(t) * b.e1y + Math.sin(t) * b.e2y) * f.r;
+        if (s === 0) g.moveTo(px, py); else g.lineTo(px, py);
+      }
+      g.stroke({ color: col, alpha: sel ? 1 : 0.7, width: sel ? 2.5 : 1.5 });
+      if (f.kind === 'bud') {
+        g.moveTo(f.x - 8, f.y - 8); g.lineTo(f.x + 8, f.y + 8);
+        g.moveTo(f.x + 8, f.y - 8); g.lineTo(f.x - 8, f.y + 8);
+        g.stroke({ color: 0xff5050, alpha: 0.9, width: 2 });
+      }
+      const h = faceHandles(f);
+      // The facing arrow: where the flower's face tips toward, as long
+      // as the tilt is steep.
+      g.moveTo(f.x, f.y); g.lineTo(h.tip.x, h.tip.y);
+      g.stroke({ color: 0x7db8ff, alpha: 0.95, width: 2 });
+      g.circle(h.tip.x, h.tip.y, sel ? 7 : 5);
+      g.fill({ color: 0x7db8ff, alpha: 0.9 });
+      g.rect(h.rim.x - 5, h.rim.y - 5, 10, 10);
+      g.fill({ color: 0xffc36b, alpha: 0.9 });
+      g.circle(f.x, f.y, 4);
+      g.fill({ color: col, alpha: 0.95 });
+    }
+    for (const key of ['monarch', 'meadow', 'moth']) {
+      for (const site of perchSites[key] || []) {
+        g.circle(site.x, site.y, key === 'moth' ? 3.5 : 2.5);
+        g.fill({ color: key === 'moth' ? 0xb8c8e8 : 0x9fd9a3, alpha: 0.9 });
+      }
+    }
+    // Sites the paint gate refused, in red, so a face can be nudged.
+    for (const key of ['monarch', 'meadow', 'moth']) {
+      for (const site of faceSites(FACES, VIS_SEED, PERCH_PREFS[key], TILE)) {
+        if (onPaint(site.x, site.y)) continue;
+        g.circle(site.x, site.y, 3.5);
+        g.stroke({ color: 0xff4040, alpha: 1, width: 1.5 });
+      }
+    }
+    while (facesEd.labels.length < FACES.length) {
+      const t = new PIXI.Text({ text: '', style: {
+        fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 13,
+        fill: 0xffffff, stroke: { color: 0x000000, width: 3 } } });
+      t.anchor.set(0.5, 0);
+      world.addChild(t);
+      facesEd.labels.push(t);
+    }
+    for (let i = 0; i < facesEd.labels.length; i++) {
+      const t = facesEd.labels[i];
+      const f = FACES[i];
+      t.visible = !!f;
+      if (!f) continue;
+      t.text = `${f.id} ${f.kind[0]}${f.color[0]} k${f.k.toFixed(2)}`;
+      t.position.set(f.x, f.y + f.r * Math.max(0.35, f.k) + 4);
+    }
+  }
+  facesEd.open = (loadDraft) => {
+    facesEd.on = true;
+    facesEd.gfx.visible = true;
+    document.body.classList.add('faces');
+    if (loadDraft) {
+      try {
+        const raw = localStorage.getItem('faces.v1');
+        const parsed = raw ? JSON.parse(raw) : null;
+        if (parsed && Array.isArray(parsed.faces) && parsed.faces.length) {
+          FACES = parsed.faces.map((f) => ({ ...f }));
+          rebuildSites();
+          rebuildSteer();
+        }
+      } catch (err) { /* a bad draft is no draft */ }
+    }
+    if (!facesEd.panel) {
+      const p = document.createElement('div');
+      p.id = 'facepanel';
+      p.innerHTML = `
+        <div class="row2"><b>Faces</b><span style="flex:1"></span>
+          <button id="facescopy">Copy JSON</button>
+          <button id="facesload">Load draft</button>
+          <button id="facesreset">Shipped</button>
+          <button id="facesexit">Exit</button></div>
+        <div class="camstatus" id="facesel"></div>
+        <div class="camstatus">Drag the center to move, the orange square
+          for radius, the blue tip for facing and tilt (longer = steeper).
+          K kind &middot; C color &middot; N new face at pointer &middot;
+          Delete removes &middot; [ ] turn the facing &middot; - = tilt.
+          Green dots: butterfly sites; blue: moth sites; red: refused
+          (off paint). Paste the JSON into assets/wallkit/faces.json.</div>`;
+      document.getElementById('stagewrap').appendChild(p);
+      facesEd.panel = p;
+      p.querySelector('#facescopy').addEventListener('click', () => {
+        const text = JSON.stringify({ tile: TILE, faces: FACES.map((f) => ({
+          id: f.id, x: Math.round(f.x), y: Math.round(f.y), r: Math.round(f.r),
+          fx: +f.fx.toFixed(3), fy: +f.fy.toFixed(3), k: +f.k.toFixed(3),
+          kind: f.kind, color: f.color })) }, null, 1);
+        if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+        console.log(text);
+        p.querySelector('#facesel').textContent = 'faces.json copied to the clipboard (and the console).';
+      });
+      p.querySelector('#facesload').addEventListener('click', () => facesEd.open(true));
+      p.querySelector('#facesreset').addEventListener('click', () => {
+        FACES = SHIPPED_FACES.map((f) => ({ ...f }));
+        facesEd.sel = -1;
+        facesChanged();
+      });
+      p.querySelector('#facesexit').addEventListener('click', () => facesEd.close());
+    }
+    facesEd.panel.style.display = 'block';
+    facesNote();
+  };
+  facesEd.close = () => {
+    facesEd.on = false;
+    facesEd.gfx.visible = false;
+    for (const t of facesEd.labels) t.visible = false;
+    document.body.classList.remove('faces');
+    if (facesEd.panel) facesEd.panel.style.display = 'none';
+  };
+  facesEd.down = (at) => {
+    const p = faceTile(at);
+    facesEd.last = p;
+    // Handles of the selected face first, then any face by its center.
+    const f = FACES[facesEd.sel];
+    if (f) {
+      const h = faceHandles(f);
+      if (faceGap(p.x, p.y, h.tip.x, h.tip.y) < 12) { facesEd.drag = 'tip'; return; }
+      if (faceGap(p.x, p.y, h.rim.x, h.rim.y) < 12) { facesEd.drag = 'rim'; return; }
+    }
+    let best = -1, bestD = Infinity;
+    for (let i = 0; i < FACES.length; i++) {
+      const d = faceGap(p.x, p.y, FACES[i].x, FACES[i].y);
+      if (d < Math.max(24, FACES[i].r * 0.5) && d < bestD) { bestD = d; best = i; }
+    }
+    facesEd.sel = best;
+    facesEd.drag = best >= 0 ? 'center' : null;
+    facesNote();
+  };
+  facesEd.move = (at) => {
+    const p = faceTile(at);
+    facesEd.last = p;
+    const f = FACES[facesEd.sel];
+    if (!f || !facesEd.drag) return;
+    if (facesEd.drag === 'center') {
+      f.x = p.x; f.y = p.y;
+    } else {
+      // Shortest torus offset from the center to the pointer.
+      let dx = p.x - f.x, dy = p.y - f.y;
+      if (dx > TILE / 2) dx -= TILE; if (dx < -TILE / 2) dx += TILE;
+      if (dy > TILE / 2) dy -= TILE; if (dy < -TILE / 2) dy += TILE;
+      const d = Math.hypot(dx, dy);
+      if (facesEd.drag === 'rim') {
+        f.r = Math.max(20, d);
+      } else if (d > 1e-6) {
+        f.fx = dx / d; f.fy = dy / d;
+        const sin = Math.min(0.995, d / f.r);
+        f.k = Math.max(0.1, Math.sqrt(1 - sin * sin));
+      }
+    }
+    rebuildSites();
+    facesNote();
+  };
+  facesEd.up = () => {
+    if (facesEd.drag) facesChanged();
+    facesEd.drag = null;
+  };
+  facesEd.key = (e) => {
+    const f = FACES[facesEd.sel];
+    const k = e.key;
+    if (k === 'Escape') { facesEd.close(); return true; }
+    if (k === 'n' || k === 'N') {
+      const p = facesEd.last;
+      FACES.push({ id: `face_${FACES.length + 1}`, x: p.x, y: p.y, r: 60,
+                   fx: 0, fy: 1, k: 0.85, kind: 'disc', color: 'white' });
+      facesEd.sel = FACES.length - 1;
+      facesChanged();
+      return true;
+    }
+    if (!f) return false;
+    if (k === 'Delete' || k === 'Backspace') {
+      FACES.splice(facesEd.sel, 1); facesEd.sel = -1; facesChanged(); return true;
+    }
+    if (k === 'k' || k === 'K') {
+      f.kind = FACE_KINDS[(FACE_KINDS.indexOf(f.kind) + 1) % FACE_KINDS.length];
+      facesChanged(); return true;
+    }
+    if (k === 'c' || k === 'C') {
+      f.color = f.color === 'white' ? 'pink' : 'white'; facesChanged(); return true;
+    }
+    if (k === '[' || k === ']') {
+      const a = (k === '[' ? -5 : 5) * Math.PI / 180;
+      const fx = f.fx * Math.cos(a) - f.fy * Math.sin(a);
+      const fy = f.fx * Math.sin(a) + f.fy * Math.cos(a);
+      f.fx = fx; f.fy = fy; facesChanged(); return true;
+    }
+    if (k === '-' || k === '=') {
+      f.k = Math.max(0.1, Math.min(1, f.k + (k === '-' ? -0.05 : 0.05)));
+      facesChanged(); return true;
+    }
+    return false;
+  };
+
   // Until the real 3D camera exists, the mouse stands in for it: moving
   // it stirs the air along its path, and the cast leans very slightly
   // toward it against the print — a depth cue, not a displacement.
@@ -5667,6 +6076,7 @@ fn mainFragment(
   wrap.addEventListener('pointermove', (e) => {
     const at = toWorld(e);
     if (!at) { cameraForce.lastX = null; return; }
+    if (facesEd.on) { facesEd.move(at); return; }
     if (proj.cal) {
       if (trimDrag) {
         const ex = at.x - trimDrag.wx;
@@ -5701,6 +6111,7 @@ fn mainFragment(
 
   let dragFrom = null;
   wrap.addEventListener('pointerdown', (e) => {
+    if (facesEd.on) { const at = toWorld(e); if (at) facesEd.down(at); return; }
     if (proj.cal) {
       const at = toWorld(e);
       trimDrag = at ? { wx: at.x, wy: at.y } : null;
@@ -5722,6 +6133,7 @@ fn mainFragment(
     calTouched();
   }, { passive: false });
   wrap.addEventListener('pointerup', (e) => {
+    if (facesEd.on) { facesEd.up(); return; }
     if (proj.cal) { trimDrag = null; calTouched(); return; }
     const at = toWorld(e);
     if (!at) { dragFrom = null; return; }
@@ -6029,6 +6441,7 @@ fn mainFragment(
     });
   });
   document.addEventListener('keydown', (e) => {
+    if (facesEd.on && facesEd.key(e)) return;
     // Escape is the way out, and it answers from anywhere - focus in a
     // trim field included. One step per press: calibrate, then
     // projection. (In fullscreen the browser eats the first press to
@@ -6890,6 +7303,7 @@ fn mainFragment(
     .replace('RAWLIGHT', '').replace('RIPPLE', '').replace('PANEQA', '')
     .replace('OPERATOR', '').replace('CALQA', '').replace('LIGHTQA', '')
     .replace('RECOLORQA', '')
+    .replace('FLOWERSQA', '').replace('FLOWERS', '')
     .replace('CAL', '')
     .replace(/^&+|&+$/g, '');
   const bootScene = SCENES[bootName] ? bootName : 'noon';
@@ -7106,6 +7520,11 @@ fn mainFragment(
   if (location.hash.includes('LIGHTQA')) {
     proj.light = true;
     applyLightOnly();
+  }
+  // '#FLOWERS' opens the faces editor (a saved draft loads); '#FLOWERSQA'
+  // opens it on the shipped faces only, for deterministic screenshots.
+  if (location.hash.includes('FLOWERS')) {
+    facesEd.open(!location.hash.includes('FLOWERSQA'));
   }
   // QA affordance: '#RECOLORQA' cans two steady rules and settles them,
   // so a first frame shows the white blooms re-inked.
