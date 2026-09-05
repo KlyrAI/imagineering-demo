@@ -537,7 +537,7 @@
         <div class="lab"><span>Release s</span><output id="rclrelout">2</output></div>
         <input type="range" id="rclrel" min="0.5" max="5" step="0.25" value="2">
       </div>
-      <p class="note" style="margin:0"><b>Touch</b> &mdash; press and sweep: lit blooms under the brush burst into sparkles</p>
+      <p class="note" style="margin:0"><b>Touch</b> &mdash; press and move: a lit bloom you touch explodes into sparkles</p>
       <div class="slider">
         <div class="lab"><span>Splash density</span><output id="rcsdout">1</output></div>
         <input type="range" id="rcsd" min="0.3" max="3" step="0.1" value="1">
@@ -584,17 +584,17 @@
       critter wears in flight (which the dust borrows). Colours are HSL:
       lightness is the projector operator&rsquo;s slider. Two critters on one bloom cross-fade; a held
       landing lets go when the last one leaves. <b>Touch</b>: anything
-      moving across the wall is a brush &mdash; the pointer today, the
-      depth camera&rsquo;s hands later. Press anywhere and sweep: every
-      lit bloom the brush crosses bursts into pixie-dust sparkles, each
-      carrying exactly the light of the petals it left (which go dark and
-      stay dark until the bloom is lit again), thrown outward from the
-      brush and along your stroke. Held still, the brush widens into a
-      wipe front. The burst slows into a cloud that is dust: it drifts on
-      the wall&rsquo;s wind, settles slowly, coils, and twinkles for as
-      long as <b>Sparkle life</b> says; <b>Splash density</b> sets how
-      many sparkles share the light. Everything here rides in presets and
-      share links.</p>
+      moving across the wall is a contact &mdash; the pointer today, the
+      depth camera&rsquo;s hands later. Press and move: the moment it
+      touches a lit bloom, that bloom explodes &mdash; all of its light at
+      once as pixie-dust sparkles, each carrying exactly the light of the
+      petals it left (which go dark and stay dark until the bloom is lit
+      again), thrown out from the point of contact and along your
+      motion&rsquo;s vector. The burst slows into a cloud that is dust: it
+      drifts on the wall&rsquo;s wind, settles slowly, coils, and
+      twinkles for as long as <b>Sparkle life</b> says; <b>Splash
+      density</b> sets how many sparkles share the light. Everything
+      here rides in presets and share links.</p>
       <details>
         <summary class="note">Steady rules (a look held on blooms with no critter)</summary>
         <div class="btnrow" id="rctargets">
@@ -6230,40 +6230,35 @@ fn mainFragment(
 
   // ---- motion disrupts the light ----------------------------------------
   // Anything moving across the wall - a hand the depth camera will see,
-  // the pointer standing in for it today - is a BRUSH. Wherever the brush
-  // crosses a lit bloom, that light comes apart into pixie-dust sparkles
-  // (Kevin: "disrupt the bloom so it explodes into particles to spawn
-  // dust, like Disney projection-mapped sparkles; physics, motion and
-  // energy conserved"; "wipe front is fine"; "swiping across a bloom
-  // from outside must work"). The bookkeeping is literal:
+  // the pointer standing in for it today - EXPLODES the lit bloom it
+  // touches: all of that bloom's light at once, as pixie-dust sparkles
+  // thrown from the contact point and along the motion's own vector
+  // (Kevin: "explosion on contact + vector"). The bookkeeping is literal:
   //  - ENERGY. A lit pixel holds a * relief * (the sprite's alpha). The
-  //    brush converts the pixels it reaches in groups of K; each group
+  //    burst converts the whole matte in groups of K pixels; each group
   //    becomes one sparkle carrying exactly the group's energy, and the
-  //    pixels go dark (an erosion mask that stays until the light is
+  //    bloom goes dark (an erosion mask that stays until the light is
   //    replaced). A sparkle loses energy only by cooling, e *= exp(-dt /
   //    tau), tau = the Sparkle life dial - long: this is dust that
   //    lingers, not a puff.
-  //  - MOMENTUM. The motion is the only net impulse: a sparkle leaves
-  //    with SPARK_CARRY of the brush's velocity (a swipe throws the light
-  //    along the stroke) plus a burst outward from the brush's centre,
-  //    fast there and zero at its rim, in a cone about each pixel's own
-  //    direction - it sums to zero - plus thermal jitter.
+  //  - MOMENTUM. Every sparkle leaves with SPARK_CARRY of the contact's
+  //    velocity - the vector - plus the explosion: outward from the
+  //    contact point, fast beside it and slower across the bloom, in a
+  //    cone about each pixel's own direction.
   //  - AFTERWARDS. The burst decays into a cloud (SPARK_TAU_BURST), then
   //    the cloud is dust: it relaxes toward the wall's air (the wind and
   //    gusts the motes feel), settles slowly (SPARK_SAG), coils on a
   //    cell-coherent swirl and twinkles - a soft core and a sharp
   //    four-point glint that flickers. Brightness is energy over
   //    footprint; nothing vanishes abruptly.
-  // The pointer session: a press starts the brush (18 px), holding it
-  // still widens it at SPARK_FRONT px/s - the wipe front - and moving
-  // it sweeps a band; sparkfield.sweep(x, y, vx, vy, r) is the same
-  // stamp for any other motion source, once per frame per blob.
+  // The pointer session: press anywhere; while held, the pointer is the
+  // contact, tested every frame within SPARK_CONTACT px of its tip.
+  // sparkfield.sweep(x, y, vx, vy, r) is the same contact for any other
+  // motion source, once per frame per blob.
   const SPARK_MAX = 2400;
   const SPARK_CARRY = 0.55;
-  const SPARK_BURST = 300;
-  const SPARK_FRONT = 110;
-  const SPARK_R0 = 18;
-  const SPARK_RMAX = 170;
+  const SPARK_BURST = 340;
+  const SPARK_CONTACT = 10;
   const SPARK_TAU_BURST = 0.45;
   const SPARK_TAU_DUST = 1.6;
   const SPARK_SAG = 14;
@@ -6313,10 +6308,12 @@ fn mainFragment(
   let sparkNext = 0, sparkSalt = 0;
   const sparkPool = makePool(sparkAdd, lanternTex, 0.5);
   const glintPool = makePool(sparkAdd, glintTex, 0.5);
-  let sparkUsed = 0, glintUsed = 0;
+  const flashPool = makePool(sparkAdd, lanternTex, 0.5);
+  let sparkUsed = 0, glintUsed = 0, flashUsed = 0;
+  const flashes = [];
   // The reference energy of one sparkle: K pixels of a fully lit petal.
   const sparkRef = () => SPARK_K_BASE / splashDials.density;
-  const ledger = { removed: 0, spawned: 0, touched: 0 };
+  const ledger = { removed: 0, spawned: 0, bursts: 0 };
   let touch = null;
   function lookColorAt(inst, look, lx, ly) {
     const f = inst.f;
@@ -6345,85 +6342,86 @@ fn mainFragment(
     if (cameraForce.lastX === null || now - cameraForce.at > 0.25) return [0, 0];
     return [cameraForce.vx, cameraForce.vy];
   }
-  // A partial group leaves as one dimmer sparkle, so the sums stay exact.
-  function flush(inst) {
-    const er = inst.erode;
-    if (!er || !er.accN) return;
+  // The explosion: the whole lit matte, at once, from the contact point.
+  function burst(inst, wx, wy, vx, vy) {
     const f = inst.f;
     const look = inst.tr ? inst.tr.look : (f.steady || inst.lastSteady);
-    spawnSpark(inst.sprite.x + er.accX, inst.sprite.y + er.accY, er.accVX, er.accVY, er.acc,
-               look ? lookColorAt(inst, look, er.accX, er.accY) : 0xffffff);
-    er.acc = 0; er.accN = 0;
-  }
-  // One stamp of the brush: every lit bloom under the disc loses the
-  // light inside it. Returns the energy converted.
-  function stamp(wx, wy, vx, vy, r) {
-    let converted = 0;
+    if (!look) return 0;
+    const er = inst.erode || (inst.erode = {
+      mask: new Float32Array(f.w * f.h), taken: new Uint8Array(f.w * f.h),
+      any: false, dirty: false, canvas: null,
+    });
+    const bx = wx - inst.sprite.x, by = wy - inst.sprite.y;
+    const base = f.base.data;
+    const lit = inst.sprite.alpha;
     const K = Math.max(3, Math.round(sparkRef()));
-    for (const inst of rcInstances) {
-      const spr = inst.sprite;
-      if (!spr.visible || spr.alpha < 0.05) continue;
-      const f = inst.f;
-      const bx = wx - spr.x, by = wy - spr.y;
-      if (bx < -r || by < -r || bx > f.w + r || by > f.h + r) continue;
-      const look = inst.tr ? inst.tr.look : (f.steady || inst.lastSteady);
-      if (!look) continue;
-      const er = inst.erode || (inst.erode = {
-        mask: new Float32Array(f.w * f.h), taken: new Uint8Array(f.w * f.h),
-        any: false, dirty: false, canvas: null, acc: 0, accN: 0, accX: 0, accY: 0, accVX: 0, accVY: 0,
-      });
-      const base = f.base.data;
-      const lit = spr.alpha;
-      const rim = 6;
-      const x0 = Math.max(0, Math.floor(bx - r)), x1 = Math.min(f.w - 1, Math.ceil(bx + r));
-      const y0 = Math.max(0, Math.floor(by - r)), y1 = Math.min(f.h - 1, Math.ceil(by + r));
-      let changed = false;
-      for (let y = y0; y <= y1; y++) {
-        for (let x = x0; x <= x1; x++) {
-          const j = y * f.w + x;
-          if (base[j * 4 + 3] < 128) continue;
-          const dx = x - bx, dy = y - by;
-          const d = Math.hypot(dx, dy);
-          if (d >= r) continue;
-          const v = d < r - rim ? 1 : (r - d) / rim;
-          if (v > er.mask[j]) { er.mask[j] = v; changed = true; }
-          if (er.taken[j] || v < 0.5) continue;
-          er.taken[j] = 1;
-          const epx = (base[j * 4 + 3] / 255) * ((f.relief ? f.relief[j] : 255) / 255) * lit;
-          ledger.removed += epx; converted += epx;
-          er.acc += epx; er.accN++; er.accX = x; er.accY = y;
-          if (er.accN >= K) {
-            const dd = Math.max(1e-3, d);
-            sparkSalt = (sparkSalt + 0x9e37) >>> 0;
-            const h1 = hashed(SPARK_SEED, sparkSalt, 1), h2 = hashed(SPARK_SEED, sparkSalt, 2);
-            // The burst: outward from the brush's centre, fast there and
-            // zero at its rim, in a cone about the pixel's own direction.
-            const speed = SPARK_BURST * (0.45 + 0.55 * h1) * (1 - d / r);
-            const ang = Math.atan2(dy, dx) + (h2 - 0.5) * 0.8;
-            const svx = SPARK_CARRY * vx + Math.cos(ang) * speed;
-            const svy = SPARK_CARRY * vy + Math.sin(ang) * speed;
-            er.accVX = svx; er.accVY = svy;
-            spawnSpark(spr.x + x + (hashed(SPARK_SEED, sparkSalt, 3) - 0.5) * 2,
-                       spr.y + y + (hashed(SPARK_SEED, sparkSalt, 4) - 0.5) * 2,
-                       svx, svy, er.acc, lookColorAt(inst, look, x, y));
-            er.acc = 0; er.accN = 0;
-          }
-        }
+    const R = Math.hypot(f.w, f.h);
+    let acc = 0, accN = 0, ax = 0, ay = 0, total = 0;
+    const emit = (x, y, e) => {
+      const dx = x - bx, dy = y - by;
+      const d = Math.max(1e-3, Math.hypot(dx, dy));
+      sparkSalt = (sparkSalt + 0x9e37) >>> 0;
+      const h1 = hashed(SPARK_SEED, sparkSalt, 1), h2 = hashed(SPARK_SEED, sparkSalt, 2);
+      // Fast beside the contact, slower across the bloom; a cone about
+      // the pixel's own direction from it.
+      const speed = SPARK_BURST * (0.45 + 0.55 * h1) * (1 - 0.5 * Math.min(1, d / R));
+      const ang = Math.atan2(dy, dx) + (h2 - 0.5) * 0.7;
+      spawnSpark(inst.sprite.x + x, inst.sprite.y + y,
+                 SPARK_CARRY * vx + Math.cos(ang) * speed,
+                 SPARK_CARRY * vy + Math.sin(ang) * speed,
+                 e, lookColorAt(inst, look, x, y));
+    };
+    for (let y = 0; y < f.h; y++) {
+      for (let x = 0; x < f.w; x++) {
+        const j = y * f.w + x;
+        if (base[j * 4 + 3] < 128 || er.taken[j]) continue;
+        er.taken[j] = 1; er.mask[j] = 1;
+        const epx = (base[j * 4 + 3] / 255) * ((f.relief ? f.relief[j] : 255) / 255) * lit;
+        ledger.removed += epx; total += epx;
+        acc += epx; accN++; ax = x; ay = y;
+        if (accN >= K) { emit(ax, ay, acc); acc = 0; accN = 0; }
       }
-      if (changed) { er.any = true; er.dirty = true; }
+    }
+    if (accN > 0) emit(ax, ay, acc);
+    if (total <= 0) return 0;
+    er.any = true; er.dirty = true;
+    // The flash: the burst's own light, still overlapping at the contact
+    // for the first third of a second.
+    flashes.push({ x: wx, y: wy, t0: clock, r: R * 0.6, tint: lookColorAt(inst, look, f.lx, f.ly), e: total });
+    ledger.bursts++;
+    return total;
+  }
+  // One contact: every lit bloom whose matte lies within r of the point
+  // explodes. Returns the energy converted.
+  function contact(wx, wy, vx, vy, r) {
+    const seen = new Set();
+    let converted = 0;
+    const probe = (px, py) => {
+      const hit = flowerAt(px, py);
+      if (!hit) return;
+      const key = hit.tile * 1000 + hit.id;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const inst = instanceOf(hit);
+      if (!inst || !inst.sprite.visible || inst.sprite.alpha < 0.05) return;
+      converted += burst(inst, wx, wy, vx, vy);
+    };
+    probe(wx, wy);
+    if (r > 0) for (let k = 0; k < 8; k++) {
+      const ang = k * Math.PI / 4;
+      probe(wx + Math.cos(ang) * r, wy + Math.sin(ang) * r);
     }
     return converted;
   }
-  // The entry for any other motion source (the depth camera's blobs):
-  // one stamp, its partial groups flushed, so every call balances.
+  // The entry for any other motion source (the depth camera's blobs).
   function sweep(wx, wy, vx, vy, r) {
-    const e = stamp(wx, wy, vx, vy, r);
-    if (e > 0) for (const inst of rcInstances) flush(inst);
-    return e;
+    return contact(wx, wy, vx, vy, r === undefined ? SPARK_CONTACT : r);
   }
   // The pointer session.
   function press(wx, wy) {
-    touch = { x: wx, y: wy, r: SPARK_R0, t0: clock, converted: 0 };
+    const [pvx, pvy] = pointerVel();
+    touch = { x: wx, y: wy, converted: 0 };
+    touch.converted += contact(wx, wy, pvx, pvy, SPARK_CONTACT);
     return true;
   }
   function move(wx, wy) {
@@ -6431,17 +6429,14 @@ fn mainFragment(
   }
   function release() {
     if (!touch) return false;
-    for (const inst of rcInstances) flush(inst);
     const did = touch.converted > 0;
-    if (did) ledger.touched++;
     touch = null;
     return did;
   }
   function stepSparks(dt) {
     if (touch) {
-      touch.r = Math.min(touch.r + SPARK_FRONT * dt, SPARK_RMAX);
       const [pvx, pvy] = pointerVel();
-      touch.converted += stamp(touch.x, touch.y, pvx, pvy, touch.r);
+      touch.converted += contact(touch.x, touch.y, pvx, pvy, SPARK_CONTACT);
     }
     const tau = splashDials.energy;
     const cool = Math.exp(-dt / tau);
@@ -6473,7 +6468,8 @@ fn mainFragment(
   function drawSparks() {
     for (let i = 0; i < sparkUsed; i++) sparkPool(i).visible = false;
     for (let i = 0; i < glintUsed; i++) glintPool(i).visible = false;
-    sparkUsed = 0; glintUsed = 0;
+    for (let i = 0; i < flashUsed; i++) flashPool(i).visible = false;
+    sparkUsed = 0; glintUsed = 0; flashUsed = 0;
     const ref = sparkRef();
     for (let i = 0; i < SPARK_MAX; i++) {
       if (!sp.live[i]) continue;
@@ -6495,6 +6491,17 @@ fn mainFragment(
       g.rotation = hashed(SPARK_SEED, sp.salt[i], 9) * Math.PI * 0.5;
       g.tint = sp.tint[i];
       g.alpha = Math.min(1, base * 1.3 * tw * tw);
+    }
+    for (let k = flashes.length - 1; k >= 0; k--) {
+      const fl = flashes[k];
+      const age = clock - fl.t0;
+      if (age > 0.35) { flashes.splice(k, 1); continue; }
+      const u = age / 0.35;
+      const f0 = flashPool(flashUsed++);
+      f0.position.set(fl.x, fl.y);
+      f0.width = f0.height = fl.r * 2 * (0.5 + 1.4 * u);
+      f0.tint = fl.tint;
+      f0.alpha = 0.8 * (1 - u) * (1 - u) * Math.min(1, fl.e / (ref * 60));
     }
   }
   const sparkfield = {
@@ -7292,8 +7299,8 @@ fn mainFragment(
       return;
     }
     dragFrom = toWorld(e);
-    // A press anywhere starts the brush: it follows the pointer while
-    // held, and whatever lit bloom it crosses comes apart.
+    // A press anywhere starts the contact: it follows the pointer while
+    // held, and any lit bloom it touches explodes.
     sparkPressed = !!(dragFrom && !rcPickMode && sparkfield.press(dragFrom.x, dragFrom.y));
   });
   wrap.addEventListener('pointercancel', () => { if (sparkPressed) { sparkfield.release(); sparkPressed = false; } });
@@ -7315,7 +7322,7 @@ fn mainFragment(
     if (proj.cal) { trimDrag = null; calTouched(); return; }
     const at = toWorld(e);
     if (!at) { if (sparkPressed) { sparkfield.release(); sparkPressed = false; } dragFrom = null; return; }
-    // The brush ends with the press; only if it took light does the
+    // The contact ends with the press; only if it took light does the
     // press count as a disruption (no droplet burst then).
     const disrupted = sparkPressed && sparkfield.release();
     sparkPressed = false;
@@ -8891,14 +8898,13 @@ fn mainFragment(
       const cx = inst.sprite.x + inst.f.lx, cy = inst.sprite.y + inst.f.ly;
       cameraForce.lastX = cx; cameraForce.lastY = cy; cameraForce.vx = 420; cameraForce.vy = -40;
       cameraForce.at = performance.now() / 1000 + 9;
-      // The stroke starts left of the bloom and sweeps across it.
+      // The stroke starts left of the bloom; the bloom explodes on contact.
       sparkfield.press(cx - 140, cy + 10);
-      for (let k = 0; k < 36; k++) {
+      for (let k = 0; k < 34; k++) {
         sparkfield.move(cx - 140 + k * 7, cy + 10 - k * 0.6);
         sparkfield.step(1 / 60); stepRecolor(1 / 60);
       }
       sparkfield.release();
-      for (let k = 0; k < 8; k++) sparkfield.step(1 / 60);
     }
   }
   // Boot straight INTO the scene: the dials start at their targets
