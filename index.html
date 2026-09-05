@@ -5228,6 +5228,41 @@ fn mainFragment(
     const byId = rcByTile[ref.tile];
     return byId ? byId.get(ref.id) || null : null;
   }
+  // The instance whose matte holds a world point. Not the label map's
+  // word: a bloom that hangs over a tile seam has label-map pixels on
+  // the far side of it, and the tile those sit in owns a DIFFERENT
+  // copy of that bloom - one whole tile away (Kevin: "some motifs are
+  // triggering explosions of an offset of a motif") - and the amodal
+  // matte reaches past the label silhouette anyway. So: every copy in
+  // the point's tile and its eight neighbours whose box holds the
+  // point and whose matte is solid there; the label map's id breaks a
+  // tie between overlapping mattes.
+  function instanceAt(wx, wy) {
+    if (wx < 0 || wy < 0 || wx >= WALL || wy >= WALL) return null;
+    const tx = Math.floor(wx / TILE), ty = Math.floor(wy / TILE);
+    const hit = flowerAt(wx, wy);
+    let best = null, bestScore = -1e9;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const x = tx + dx, y = ty + dy;
+        if (x < 0 || y < 0 || x >= GRID || y >= GRID) continue;
+        const byId = rcByTile[y * GRID + x];
+        if (!byId) continue;
+        for (const inst of byId.values()) {
+          const lx = Math.floor(wx - inst.sprite.x), ly = Math.floor(wy - inst.sprite.y);
+          if (lx < 0 || ly < 0 || lx >= inst.f.w || ly >= inst.f.h) continue;
+          const a = inst.f.base.data[(ly * inst.f.w + lx) * 4 + 3];
+          if (a < 128) continue;
+          if (hit && hit.id === inst.f.id) return inst;
+          // Overlapping mattes with no label to arbitrate: the denser
+          // one, and nearer its own centre for its size.
+          const score = a / 255 - 0.5 * Math.hypot(lx - inst.f.lx, ly - inst.f.ly) / (0.5 * Math.max(inst.f.w, inst.f.h));
+          if (!best || score > bestScore) { best = inst; bestScore = score; }
+        }
+      }
+    }
+    return best || (hit ? instanceOf(hit) : null);
+  }
   const recolor = {
     rule(target, look) {
       const key = targetKey(target);
@@ -5333,6 +5368,7 @@ fn mainFragment(
     get haloNow() { return haloColors; },
     instances: rcInstances,
     at: flowerAt,
+    instanceAt,
   };
   const recolorListeners = [];
   function recolorChanged() {
@@ -6636,13 +6672,10 @@ fn mainFragment(
     const seen = new Set();
     let converted = 0;
     const probe = (px, py) => {
-      const hit = flowerAt(px, py);
-      if (!hit) return;
-      const key = hit.tile * 1000 + hit.id;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const inst = instanceOf(hit);
-      if (!inst || !inst.sprite.visible || inst.sprite.alpha < 0.05) return;
+      const inst = instanceAt(px, py);
+      if (!inst || seen.has(inst)) return;
+      seen.add(inst);
+      if (!inst.sprite.visible || inst.sprite.alpha < 0.05) return;
       converted += burst(inst, wx, wy, vx, vy);
     };
     probe(wx, wy);
@@ -7896,9 +7929,9 @@ fn mainFragment(
       ripples.push({ x: at.x, y: at.y, t0: clock });
       disturbAt(at.x, at.y);
       if (rcReactions.touch) {
-        const hit = flowerAt(at.x, at.y);
-        if (hit) {
-          recolor.reveal(hit, rcReactions.perch.look || DEFAULT_LANDING,
+        const inst = instanceAt(at.x, at.y);
+        if (inst) {
+          recolor.reveal({ tile: inst.tile, id: inst.f.id }, rcReactions.perch.look || DEFAULT_LANDING,
                          { from: [at.x, at.y], speed: 220, hold: 1.2, release: 1.4 });
         }
       }
