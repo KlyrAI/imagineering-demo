@@ -537,6 +537,15 @@
         <div class="lab"><span>Release s</span><output id="rclrelout">2</output></div>
         <input type="range" id="rclrel" min="0.5" max="5" step="0.25" value="2">
       </div>
+      <p class="note" style="margin:0"><b>Touch</b> &mdash; press a lit bloom and its light comes apart</p>
+      <div class="slider">
+        <div class="lab"><span>Splash density</span><output id="rcsdout">1</output></div>
+        <input type="range" id="rcsd" min="0.3" max="3" step="0.1" value="1">
+      </div>
+      <div class="slider">
+        <div class="lab"><span>Splash energy s</span><output id="rcseout">2.5</output></div>
+        <input type="range" id="rcse" min="0.8" max="6" step="0.1" value="2.5">
+      </div>
       <p class="note" style="margin:0"><b>Outline</b> &mdash; the wall&rsquo;s dials, every outlined bloom</p>
       <div class="slider">
         <div class="lab"><span>Line px</span><output id="rcowout">2</output></div>
@@ -574,8 +583,15 @@
       pairs here, all in view: the fill, the outline, and the halo the
       critter wears in flight (which the dust borrows). Colours are HSL:
       lightness is the projector operator&rsquo;s slider. Two critters on one bloom cross-fade; a held
-      landing lets go when the last one leaves. Everything here rides in
-      presets and share links.</p>
+      landing lets go when the last one leaves. <b>Touch</b>: press a lit
+      bloom and its light comes apart into sparks from the touch point
+      outward while you hold &mdash; each spark carries exactly the light
+      of the petals it left (which go dark and stay dark until the bloom
+      is lit again), leaves with the stroke&rsquo;s momentum and a push
+      from the touch, then drifts on the wall&rsquo;s wind, rises a
+      little, coils, and cools. <b>Splash density</b> sets how many
+      sparks share the light, <b>Splash energy</b> how long they burn.
+      Everything here rides in presets and share links.</p>
       <details>
         <summary class="note">Steady rules (a look held on blooms with no critter)</summary>
         <div class="btnrow" id="rctargets">
@@ -4967,6 +4983,26 @@ fn mainFragment(
       rcByTile.push(byId);
     }
   }
+  // The light a touch took: the erosion mask punched out of the look.
+  function erodeOut(ctx, inst) {
+    const er = inst.erode, f = inst.f;
+    if (!er.canvas) {
+      er.canvas = document.createElement('canvas');
+      er.canvas.width = f.w; er.canvas.height = f.h;
+      er.cctx = er.canvas.getContext('2d');
+      er.img = er.cctx.createImageData(f.w, f.h);
+    }
+    if (er.dirty) {
+      const d = er.img.data;
+      for (let j = 0, i = 3; j < er.mask.length; j++, i += 4) d[i] = Math.round(255 * er.mask[j]);
+      er.cctx.putImageData(er.img, 0, 0);
+      er.dirty = false;
+    }
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.drawImage(er.canvas, 0, 0);
+    ctx.restore();
+  }
   function ownCanvas(inst) {
     if (!inst.canvas) {
       inst.canvas = document.createElement('canvas');
@@ -5015,6 +5051,7 @@ fn mainFragment(
     return '?';
   }
   function resolveSteady() {
+    for (const inst of rcInstances) { inst.erode = null; if (inst.texKey === 'own') inst.texKey = ''; }
     for (const f of FLOWERS) {
       let best = null, bestRank = -1;
       for (const r of rcRules) {
@@ -5061,6 +5098,7 @@ fn mainFragment(
     }
     inst.tr = tr;
     inst.texKey = '';
+    inst.erode = null;
   }
   function envelopeOf(tr, now) {
     const t = now - tr.t0;
@@ -5132,6 +5170,10 @@ fn mainFragment(
       haloColors = normHalo({ ...haloColors, ...(next || {}) });
       recolorChanged();
     },
+    splash(next) {
+      splashDials = normSplash({ ...splashDials, ...(next || {}) });
+      recolorChanged();
+    },
     outline(next) {
       outline = normOutline({ ...outline, ...(next || {}) });
       // Every instance re-keys on the next step (the keys carry the dials).
@@ -5150,6 +5192,7 @@ fn mainFragment(
         reactions: JSON.parse(JSON.stringify(rcReactions)),
         outline: { ...outline },
         halo: { ...haloColors },
+        splash: { ...splashDials },
       };
     },
     load(st) {
@@ -5160,6 +5203,7 @@ fn mainFragment(
       rcReactions = JSON.parse(JSON.stringify(DEFAULT_REACTIONS));
       outline = normOutline(st && st.outline);
       haloColors = normHalo(st && st.halo);
+      splashDials = normSplash(st && st.splash);
       if (st && st.reactions) {
         if (st.reactions.perch) rcReactions.perch = mergePerch(rcReactions.perch, st.reactions.perch);
         if (typeof st.reactions.touch === 'boolean') rcReactions.touch = st.reactions.touch;
@@ -5197,7 +5241,7 @@ fn mainFragment(
       let look = null, env = 1;
       if (inst.tr) {
         env = envelopeOf(inst.tr, clock);
-        if (env < 0) { inst.tr = null; inst.texKey = ''; }
+        if (env < 0) { inst.tr = null; inst.texKey = ''; inst.erode = null; }
         else look = inst.tr.look;
       }
       stepPrev(inst, level);
@@ -5222,11 +5266,14 @@ fn mainFragment(
       const animated = look.kind === 'shimmer' && look.rate > 0 && !useEdge(f, look);
       const revealing = tr && tr.mode === 'reveal'
         && (clock - tr.t0) * tr.speed < Math.hypot(f.w, f.h) + 20;
-      if (revealing || animated) {
-        const due = revealing || clock - inst.paintedAt >= 1 / 12;
+      const eroded = !!(inst.erode && inst.erode.any);
+      if (revealing || animated || eroded) {
+        const due = revealing || (eroded && inst.erode.dirty)
+          || (animated && clock - inst.paintedAt >= 1 / 12) || inst.texKey !== 'own';
         if (due) {
           const ctx = ownCanvas(inst);
           paintLook(ctx, f, look, animated ? clock * look.rate * 0.9 : 0);
+          if (eroded) erodeOut(ctx, inst);
           if (revealing) {
             const r = Math.max(1, (clock - tr.t0) * tr.speed);
             const g = ctx.createRadialGradient(tr.from[0], tr.from[1], Math.max(0, r - 16),
@@ -5663,6 +5710,11 @@ fn mainFragment(
   const rainAdd = new PIXI.Container();
   rainAdd.blendMode = 'add';
   lightScene.addChild(rainAdd);
+  // The sparks a touch shakes out of a lit bloom: additive, in front of
+  // everything the wall carries.
+  const sparkAdd = new PIXI.Container();
+  sparkAdd.blendMode = 'add';
+  lightScene.addChild(sparkAdd);
   // The glass layer's own lanes: its sprites are PERSISTENT (a droplet
   // owns its sprites for life), so they must not live where the
   // per-frame pool hide-loops sweep.
@@ -6173,6 +6225,242 @@ fn mainFragment(
     }
   }
 
+  // ---- touch disrupts the light -----------------------------------------
+  // Press a LIT bloom and its light disintegrates into sparks (Kevin: "a
+  // Disney splash of magic; physics, motion and energy conserved").
+  // The bookkeeping is literal:
+  //  - ENERGY. A lit pixel holds a * relief * (the sprite's alpha). The
+  //    front converts pixels in groups of K; each group becomes one spark
+  //    carrying exactly the group's energy, and the pixels go dark on the
+  //    bloom (an erosion mask that stays until the light is replaced).
+  //    A spark loses energy only by cooling, e *= exp(-dt / tau_e).
+  //  - MOMENTUM. The pointer is the only impulse: a spark leaves with
+  //    SPARK_CARRY of the pointer's velocity (a swipe flings the light
+  //    along the stroke) plus a radial push from the touch point that
+  //    fades to zero at the front's edge (a still press puffs outward,
+  //    net momentum zero), plus thermal jitter.
+  //  - AFTERWARDS. Velocity relaxes toward the wall's air (drag toward
+  //    the same wind and gusts the motes feel), a small ember lift, and
+  //    a cell-coherent swirl so the cloud coils. Footprint grows with age
+  //    and brightness is energy over footprint: the puff dims as it
+  //    spreads, and nothing vanishes abruptly.
+  const SPARK_MAX = 1500;
+  const SPARK_CARRY = 0.55;
+  const SPARK_RADIAL = 120;
+  const SPARK_FRONT = 110;
+  const SPARK_TAU_V = 0.9;
+  const SPARK_LIFT = 22;
+  const SPARK_SWIRL = 90;
+  const SPARK_SEED = 0x5a71;
+  const SPARK_K_BASE = 28;
+  const DEFAULT_SPLASH = { density: 1, energy: 2.5 };
+  let splashDials = { ...DEFAULT_SPLASH };
+  function normSplash(next) {
+    const out = { ...DEFAULT_SPLASH, ...(next || {}) };
+    out.density = Math.max(0.3, Math.min(3, +out.density || DEFAULT_SPLASH.density));
+    out.energy = Math.max(0.8, Math.min(6, +out.energy || DEFAULT_SPLASH.energy));
+    return out;
+  }
+  const sp = {
+    x: new Float32Array(SPARK_MAX), y: new Float32Array(SPARK_MAX),
+    vx: new Float32Array(SPARK_MAX), vy: new Float32Array(SPARK_MAX),
+    e: new Float32Array(SPARK_MAX), e0: new Float32Array(SPARK_MAX),
+    r0: new Float32Array(SPARK_MAX), age: new Float32Array(SPARK_MAX),
+    tint: new Uint32Array(SPARK_MAX), salt: new Uint32Array(SPARK_MAX),
+    live: new Uint8Array(SPARK_MAX),
+  };
+  let sparkNext = 0, sparkSalt = 0;
+  const sparkPool = makePool(sparkAdd, lanternTex, 0.5);
+  const streakPool = makePool(sparkAdd, streakTex, 1);
+  let sparkUsed = 0, streakUsed = 0;
+  // The reference energy of one spark: K pixels of a fully lit petal.
+  const sparkRef = () => SPARK_K_BASE / splashDials.density;
+  let touch = null;
+  const ledger = { removed: 0, spawned: 0 };
+  function lookColorAt(inst, look, lx, ly) {
+    const f = inst.f;
+    let a, b, t;
+    if (useEdge(f, look)) { a = look.edgeA || look.a; b = look.edgeB || look.b; t = 0.4; }
+    else if (look.kind === 'solid') { a = look.a; b = look.a; t = 0; }
+    else if (look.kind === 'radial') {
+      a = look.a; b = look.b;
+      t = Math.min(1, Math.hypot(lx - f.lx, ly - f.ly) / (Math.max(f.w, f.h) * 0.55 * (look.scale || 1)));
+    } else { a = look.a; b = look.b; t = 0.5; }
+    const A = hexRGB(a), B = hexRGB(b);
+    const c = A.map((v, i) => Math.round(v + (B[i] - v) * t));
+    return (c[0] << 16) | (c[1] << 8) | c[2];
+  }
+  function spawnSpark(wx, wy, vx, vy, e, tint) {
+    const i = sparkNext; sparkNext = (sparkNext + 1) % SPARK_MAX;
+    sparkSalt = (sparkSalt + 0x9e37) >>> 0;
+    sp.x[i] = wx; sp.y[i] = wy; sp.vx[i] = vx; sp.vy[i] = vy;
+    sp.e[i] = e; sp.e0[i] = e; sp.age[i] = 0; sp.tint[i] = tint; sp.salt[i] = sparkSalt;
+    sp.r0[i] = 5 + 5 * Math.sqrt(e / sparkRef());
+    sp.live[i] = 1;
+    ledger.spawned += e;
+  }
+  function pointerVel() {
+    const now = performance.now() / 1000;
+    if (cameraForce.lastX === null || now - cameraForce.at > 0.25) return [0, 0];
+    return [cameraForce.vx, cameraForce.vy];
+  }
+  // The front: every matte pixel newly inside it converts. Soft rim of
+  // 6 px so the hole is not a hard bite; the ledger keeps the sums exact
+  // (a partial group is flushed at release).
+  function convert(dt) {
+    if (!touch) return;
+    const inst = touch.inst, f = inst.f;
+    if (!inst.sprite.visible || inst.sprite.alpha < 0.02) { release(); return; }
+    touch.r = Math.min(touch.r + SPARK_FRONT * dt, touch.rMax);
+    const bx = touch.x - inst.sprite.x, by = touch.y - inst.sprite.y;
+    const er = inst.erode || (inst.erode = {
+      mask: new Float32Array(f.w * f.h), taken: new Uint8Array(f.w * f.h),
+      any: false, dirty: false, canvas: null,
+    });
+    const look = inst.tr ? inst.tr.look : (f.steady || inst.lastSteady);
+    if (!look) return;
+    const [pvx, pvy] = pointerVel();
+    const r = touch.r, rim = 6;
+    const x0 = Math.max(0, Math.floor(bx - r)), x1 = Math.min(f.w - 1, Math.ceil(bx + r));
+    const y0 = Math.max(0, Math.floor(by - r)), y1 = Math.min(f.h - 1, Math.ceil(by + r));
+    const base = f.base.data;
+    const lit = inst.sprite.alpha;
+    const K = Math.max(4, Math.round(sparkRef()));
+    let changed = false;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const j = y * f.w + x;
+        if (base[j * 4 + 3] < 128) continue;
+        const d = Math.hypot(x - bx, y - by);
+        if (d >= r) continue;
+        const v = d < r - rim ? 1 : (r - d) / rim;
+        if (v > er.mask[j]) { er.mask[j] = v; changed = true; }
+        if (er.taken[j] || v < 0.5) continue;
+        er.taken[j] = 1;
+        // The pixel's light, now a spark's share.
+        const epx = (base[j * 4 + 3] / 255) * ((f.relief ? f.relief[j] : 255) / 255) * lit;
+        ledger.removed += epx;
+        touch.acc += epx; touch.accN++;
+        touch.accX = x; touch.accY = y;
+        if (touch.accN >= K) {
+          const rx = Math.max(1e-3, d);
+          const push = SPARK_RADIAL * (1 - d / r);
+          sparkSalt = (sparkSalt + 0x9e37) >>> 0;
+          const jx = (hashed(SPARK_SEED, sparkSalt, 1) - 0.5) * 50;
+          const jy = (hashed(SPARK_SEED, sparkSalt, 2) - 0.5) * 50;
+          spawnSpark(inst.sprite.x + x + (hashed(SPARK_SEED, sparkSalt, 3) - 0.5) * 3,
+                     inst.sprite.y + y + (hashed(SPARK_SEED, sparkSalt, 4) - 0.5) * 3,
+                     SPARK_CARRY * pvx + ((x - bx) / rx) * push + jx,
+                     SPARK_CARRY * pvy + ((y - by) / rx) * push + jy,
+                     touch.acc, lookColorAt(inst, look, x, y));
+          touch.spawned++;
+          touch.acc = 0; touch.accN = 0;
+        }
+      }
+    }
+    if (changed) { er.any = true; er.dirty = true; }
+  }
+  function press(wx, wy) {
+    const hit = flowerAt(wx, wy);
+    if (!hit) return false;
+    const inst = instanceOf(hit);
+    if (!inst || !inst.sprite.visible || inst.sprite.alpha < 0.05) return false;
+    if (touch) release();
+    touch = { inst, x: wx, y: wy, r: 18, rMax: Math.hypot(inst.f.w, inst.f.h) + 40,
+              t0: clock, acc: 0, accN: 0, accX: 0, accY: 0, spawned: 0 };
+    return true;
+  }
+  function move(wx, wy) {
+    if (touch) { touch.x = wx; touch.y = wy; }
+  }
+  function release() {
+    if (!touch) return;
+    if (touch.accN > 0) {
+      // The partial group leaves as one dimmer spark: the sums stay exact.
+      const inst = touch.inst, f = inst.f;
+      const look = inst.tr ? inst.tr.look : (f.steady || inst.lastSteady);
+      const [pvx, pvy] = pointerVel();
+      spawnSpark(inst.sprite.x + touch.accX, inst.sprite.y + touch.accY,
+                 SPARK_CARRY * pvx, SPARK_CARRY * pvy, touch.acc,
+                 look ? lookColorAt(inst, look, touch.accX, touch.accY) : 0xffffff);
+      touch.spawned++;
+    }
+    touch = null;
+  }
+  function stepSparks(dt) {
+    convert(dt);
+    const tau = splashDials.energy;
+    const cool = Math.exp(-dt / tau);
+    const relax = 1 - Math.exp(-dt / SPARK_TAU_V);
+    const flowX = weather.wind * 30 + (clock < weather.gustUntil ? weather.gustVX * 55 : 0);
+    const flowY = clock < weather.gustUntil ? weather.gustVY * 55 : 0;
+    const cellT = Math.floor(clock * 1.5);
+    for (let i = 0; i < SPARK_MAX; i++) {
+      if (!sp.live[i]) continue;
+      sp.age[i] += dt;
+      sp.e[i] *= cool;
+      if (sp.e[i] < 0.004 * sp.e0[i] || sp.age[i] > 14
+          || sp.x[i] < -80 || sp.y[i] < -80 || sp.x[i] > WALL + 80 || sp.y[i] > WALL + 80) {
+        sp.live[i] = 0; continue;
+      }
+      // Drag toward the air, an ember's lift, the cell's swirl.
+      sp.vx[i] += (flowX - sp.vx[i]) * relax;
+      sp.vy[i] += (flowY - sp.vy[i]) * relax - SPARK_LIFT * dt;
+      const cell = (Math.floor(sp.x[i] / 60) * 131 + Math.floor(sp.y[i] / 60) * 17 + cellT * 977) >>> 0;
+      const ang = hashed(SPARK_SEED, cell, 5) * Math.PI * 2;
+      sp.vx[i] += Math.cos(ang) * SPARK_SWIRL * dt;
+      sp.vy[i] += Math.sin(ang) * SPARK_SWIRL * dt;
+      sp.x[i] += sp.vx[i] * dt;
+      sp.y[i] += sp.vy[i] * dt;
+    }
+  }
+  function drawSparks() {
+    for (let i = 0; i < sparkUsed; i++) sparkPool(i).visible = false;
+    for (let i = 0; i < streakUsed; i++) streakPool(i).visible = false;
+    sparkUsed = 0; streakUsed = 0;
+    const ref = sparkRef();
+    for (let i = 0; i < SPARK_MAX; i++) {
+      if (!sp.live[i]) continue;
+      const r = sp.r0[i] * (1 + 0.6 * sp.age[i]);
+      // Brightness is energy over footprint, so the puff dims as it
+      // spreads; a fresh spark of the reference energy sits near 0.9.
+      const base = 0.9 * (sp.e[i] / ref) * (sp.r0[i] * sp.r0[i]) / (r * r);
+      const tw = 0.72 + 0.28 * Math.sin(sp.age[i] * (6 + 3 * hashed(SPARK_SEED, sp.salt[i], 6)) * Math.PI * 2
+        + hashed(SPARK_SEED, sp.salt[i], 7) * Math.PI * 2);
+      const alpha = Math.min(1, base * tw);
+      if (alpha < 0.01) continue;
+      const s0 = sparkPool(sparkUsed++);
+      s0.position.set(sp.x[i], sp.y[i]);
+      s0.width = s0.height = r * 2;
+      s0.tint = sp.tint[i];
+      s0.alpha = alpha;
+      const speed = Math.hypot(sp.vx[i], sp.vy[i]);
+      if (speed > 180) {
+        // The streak: the spark's own light smeared along its path.
+        const st = streakPool(streakUsed++);
+        st.position.set(sp.x[i], sp.y[i]);
+        st.rotation = Math.atan2(-sp.vx[i], sp.vy[i]);
+        st.width = r * 0.9;
+        st.height = Math.min(70, speed * 0.06);
+        st.tint = sp.tint[i];
+        st.alpha = alpha * 0.55;
+      }
+    }
+  }
+  const sparkfield = {
+    press, move, release,
+    step: stepSparks, draw: drawSparks,
+    count: () => { let n = 0; for (let i = 0; i < SPARK_MAX; i++) n += sp.live[i]; return n; },
+    energy: () => { let e = 0; for (let i = 0; i < SPARK_MAX; i++) if (sp.live[i]) e += sp.e[i]; return e; },
+    momentum: () => { let x = 0, y = 0, n = 0; for (let i = 0; i < SPARK_MAX; i++) if (sp.live[i]) { x += sp.vx[i]; y += sp.vy[i]; n++; } return [x, y, n]; },
+    ledger,
+    get touching() { return touch; },
+    get dials() { return splashDials; },
+    // QA: stand in for a moving pointer.
+    primeVel: (vx, vy) => { cameraForce.vx = vx; cameraForce.vy = vy; cameraForce.lastX = 0; cameraForce.lastY = 0; cameraForce.at = performance.now() / 1000 + 5; },
+  };
+  window.sparkfield = sparkfield;
+
   // ---- the loop --------------------------------------------------------
   let clock = 0;
   const fpsOut = document.getElementById('fps');
@@ -6322,7 +6610,9 @@ fn mainFragment(
     drawTrace();
     drawRipples();
     frameDt = dt;
+    sparkfield.step(dt);
     drawVisitors();
+    sparkfield.draw();
     if (facesEd.on) drawFacesEd();
 
     // The rain, drawn as water. Falling drops are graduated streaks
@@ -6939,9 +7229,11 @@ fn mainFragment(
     cameraForce.lastX = at.x; cameraForce.lastY = at.y;
     cameraForce.x = at.x; cameraForce.y = at.y;
     cameraForce.at = now;
+    if (sparkPressed) sparkfield.move(at.x, at.y);
   });
 
   let dragFrom = null;
+  let sparkPressed = false;
   wrap.addEventListener('pointerdown', (e) => {
     if (facesEd.on) { const at = toWorld(e); if (at) facesEd.down(at); return; }
     if (proj.cal) {
@@ -6950,7 +7242,11 @@ fn mainFragment(
       return;
     }
     dragFrom = toWorld(e);
+    // A press on a LIT bloom starts the disruption; the front follows
+    // the pointer while it is held.
+    sparkPressed = !!(dragFrom && !rcPickMode && sparkfield.press(dragFrom.x, dragFrom.y));
   });
+  wrap.addEventListener('pointercancel', () => { if (sparkPressed) { sparkfield.release(); sparkPressed = false; } });
   wrap.addEventListener('wheel', (e) => {
     if (!proj.cal) return;
     e.preventDefault();
@@ -6968,8 +7264,9 @@ fn mainFragment(
     if (facesEd.on) { facesEd.up(); return; }
     if (proj.cal) { trimDrag = null; calTouched(); return; }
     const at = toWorld(e);
-    if (!at) { dragFrom = null; return; }
-    if (dragFrom && Math.hypot(at.x - dragFrom.x, at.y - dragFrom.y) > 24) {
+    if (!at) { if (sparkPressed) { sparkfield.release(); sparkPressed = false; } dragFrom = null; return; }
+    const stroked = dragFrom && Math.hypot(at.x - dragFrom.x, at.y - dragFrom.y) > 24;
+    if (stroked) {
       // A drag is a gust ALONG the stroke: the wall leans with it, as hard
       // as the stroke was long, fading out over a second and a half. The
       // vertical share is damped — walls feel sideways wind most.
@@ -6980,6 +7277,15 @@ fn mainFragment(
       weather.gustVY = (dy / len) * power * 0.6;
       weather.gustPower = power;
       weather.gustUntil = clock + 1.4;
+    }
+    if (sparkPressed) {
+      // The disruption ends with the press; the flash still scares the
+      // critters near it. No droplet burst on a lit bloom.
+      sparkfield.release();
+      sparkPressed = false;
+      disturbAt(at.x, at.y);
+    } else if (stroked) {
+      // the gust was the whole gesture
     } else if (rcPickMode) {
       // Pick from wall: the click names a bloom for the Recolor panel.
       const hit = flowerAt(at.x, at.y);
@@ -7342,6 +7648,7 @@ fn mainFragment(
     else if (msg.op === 'clearAll') recolor.clear();
     else if (msg.op === 'outline') recolor.outline(msg.outline);
     else if (msg.op === 'halo') recolor.halo(msg.halo);
+    else if (msg.op === 'splash') recolor.splash(msg.splash);
     else if (msg.op === 'reactions') recolor.reactions({ perch: msg.perch, touch: msg.touch });
   }
   if (calBus) {
@@ -8008,6 +8315,13 @@ fn mainFragment(
       recolor.outline({ [field]: Number(rcEl(id).value) });
     });
   }
+  const SPLASH_DIALS = [['rcsd', 'rcsdout', 'density'], ['rcse', 'rcseout', 'energy']];
+  for (const [id, out, field] of SPLASH_DIALS) {
+    rcEl(id).addEventListener('input', () => {
+      rcEl(out).textContent = rcEl(id).value;
+      recolor.splash({ [field]: Number(rcEl(id).value) });
+    });
+  }
   rcPick = hslPicker(rcEl('rchsl'), { a: '#b46bff', b: '#ffe08a' }, () => rcLiveUpdate());
   rcEdgePick = hslPicker(rcEl('rcehsl'), { a: '#ffb0d8', b: '#ff4f9a' }, () => rcLiveUpdate());
   rcEl('rcapply').addEventListener('click', () => recolor.rule(rcTarget, rcPanelLook()));
@@ -8097,6 +8411,10 @@ fn mainFragment(
     for (const [id, out, field] of OUTLINE_DIALS) {
       if (document.activeElement === rcEl(id)) continue;
       rcEl(id).value = outline[field]; rcEl(out).textContent = outline[field];
+    }
+    for (const [id, out, field] of SPLASH_DIALS) {
+      if (document.activeElement === rcEl(id)) continue;
+      rcEl(id).value = splashDials[field]; rcEl(out).textContent = splashDials[field];
     }
     // A landing look set from elsewhere (operator, preset, share link)
     // shows in the fields - unless a field is being dragged right now.
@@ -8510,6 +8828,23 @@ fn mainFragment(
     recolor.rule('all', { kind: 'solid', a: '#ff6a9a', intensity: 0.9, lift: 0.7, relief: 0.7 });
     recolor.reactions({ perch: { mode: 'fade' } });
     recolor.settle();
+  }
+  // QA affordance: '?SPLASHQA' lights the whites, presses the first lit
+  // bloom of the middle tile with a rightward stroke and lets the cloud
+  // run for a moment, so a first frame shows the disruption.
+  if (location.search.includes('SPLASHQA')) {
+    recolor.rule('white', { kind: 'radial', a: '#ffcf70', b: '#ff7a18', intensity: 0.95, lift: 0.75, relief: 0.8 });
+    recolor.settle();
+    const inst = rcInstances.find((i) => i.tile === 4 && i.f.color === 'white' && i.sprite.visible);
+    if (inst) {
+      const cx = inst.sprite.x + inst.f.lx, cy = inst.sprite.y + inst.f.ly;
+      cameraForce.lastX = cx; cameraForce.lastY = cy; cameraForce.vx = 420; cameraForce.vy = -60;
+      cameraForce.at = performance.now() / 1000 + 9;
+      sparkfield.press(cx, cy);
+      for (let k = 0; k < 40; k++) { sparkfield.step(1 / 60); stepRecolor(1 / 60); }
+      sparkfield.release();
+      for (let k = 0; k < 10; k++) sparkfield.step(1 / 60);
+    }
   }
   // Boot straight INTO the scene: the dials start at their targets
   // rather than easing from noon.
