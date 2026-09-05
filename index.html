@@ -424,10 +424,14 @@
         <input type="range" id="dapplesway" min="0" max="2" step="0.05" value="1">
       </div>
       <div class="slider">
+        <div class="lab"><span>Dapple gust</span><output id="dapplegustout">1</output></div>
+        <input type="range" id="dapplegust" min="0" max="2" step="0.05" value="1">
+      </div>
+      <div class="slider">
         <div class="lab"><span>Frame</span><output id="dappleframeout">1</output></div>
         <input type="range" id="dappleframe" min="0" max="1.5" step="0.05" value="1">
       </div>
-      <p class="note" style="margin:0"><b>Dapple</b> &mdash; a canopy cookie in front of the projector: branch and leaf shadows over everything, swaying on the wind; <b>Frame</b> dirties the raster&rsquo;s edge</p>
+      <p class="note" style="margin:0"><b>Dapple</b> &mdash; a canopy cookie in front of the projector: branch and leaf shadows over everything, swaying on the wind; <b>Dapple gust</b> is how much a stroke, thunder or the Gust button leans it (0: the canopy ignores disturbances); <b>Frame</b> dirties the raster&rsquo;s edge</p>
       <div class="btnrow" id="stylerow">
         <button data-style="scene" class="on">Scene</button>
         <button data-style="print">Print</button>
@@ -4632,7 +4636,11 @@ fn mainFragment(
     return ctx.canvas;
   })();
   // The frame: an irregular soft dark border whose inner edge wanders,
-  // leaves along it - the raster's rectangle, dirtied.
+  // leaves along it - the raster's rectangle, dirtied. One hard mask
+  // (the band, its wandering inner edge, the leaves), then a pyramid
+  // blur - down to a small canvas and back up, bilinear both ways - so
+  // the falloff is one smooth ramp and never a stack of rings (Kevin:
+  // "banding with the edge dapple").
   const goboFrame = (() => {
     const n = 1024, ctx = goboCanvas(n);
     // A point on the canvas perimeter at u in [0, 1) and its inward normal.
@@ -4643,30 +4651,49 @@ fn mainFragment(
       if (side === 2) return { x: n - t, y: n, nx: 0, ny: -1 };
       return { x: 0, y: n - t, nx: 1, ny: 0 };
     };
-    const inset = (u) => 70 + 45 * wobble(GOBO_SEED, 900, u * 9) + 20 * wobble(GOBO_SEED, 901, u * 31);
-    const ring = (k) => {
-      ctx.beginPath();
-      ctx.rect(-4, -4, n + 8, n + 8);
-      const steps = 320;
-      for (let i = 0; i <= steps; i++) {
-        const u = (i % steps) / steps;
-        const q = perim(u), ins = inset(u) * k;
-        // The inner edge, inset along the side's normal; the corners chamfer where two sides meet.
-        const cx = q.x + q.nx * ins, cy = q.y + q.ny * ins;
-        if (i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
-      }
-      ctx.closePath();
-      ctx.fill('evenodd');
-    };
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    for (const k of [1.0, 0.82, 0.64, 0.46]) ring(k);
-    ctx.fillStyle = '#000';
+    const inset = (u) => 78 + 45 * wobble(GOBO_SEED, 900, u * 9) + 20 * wobble(GOBO_SEED, 901, u * 31);
+    ctx.beginPath();
+    ctx.rect(-4, -4, n + 8, n + 8);
+    const steps = 320;
+    for (let i = 0; i <= steps; i++) {
+      const u = (i % steps) / steps;
+      const q = perim(u), ins = inset(u);
+      const cx = q.x + q.nx * ins, cy = q.y + q.ny * ins;
+      if (i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+    }
+    ctx.closePath();
+    ctx.fill('evenodd');
     for (let i = 0; i < 90; i++) {
       const u = gh(36);
       const q = perim(u), ins = inset(u) * (0.5 + 0.7 * gh(37));
       goboCluster(ctx, q.x + q.nx * ins, q.y + q.ny * ins, Math.atan2(q.ny, q.nx), 3 + Math.floor(gh(38) * 4), 14 + gh(39) * 12);
     }
-    return ctx.canvas;
+    // A pyramid blur: down to a small canvas and back, bilinear each way.
+    const pyramid = (src, m) => {
+      const small = document.createElement('canvas');
+      small.width = m; small.height = m;
+      const sctx = small.getContext('2d');
+      sctx.imageSmoothingEnabled = true; sctx.imageSmoothingQuality = 'high';
+      sctx.drawImage(src, 0, 0, m, m);
+      const big = goboCanvas(n);
+      big.imageSmoothingEnabled = true; big.imageSmoothingQuality = 'high';
+      big.drawImage(small, 0, 0, n, n);
+      return big.canvas;
+    };
+    // Two parts, multiplied: the broad vignette - the same band through
+    // a coarse pyramid, so it fades over its whole width and is black
+    // only at the very edge - and the wandering edge with its leaves,
+    // lightly blurred, at half strength.
+    const vignette = pyramid(ctx.canvas, 20);
+    const edge = pyramid(ctx.canvas, 160);
+    const out = goboCanvas(n);
+    out.drawImage(vignette, 0, 0);
+    out.globalAlpha = 0.5;
+    out.globalCompositeOperation = 'multiply';
+    out.drawImage(edge, 0, 0);
+    out.globalAlpha = 1;
+    out.globalCompositeOperation = 'source-over';
+    return out.canvas;
   })();
   const gobo = { layers: [], live: 0, base: 0.5, canvases: { far: goboFar, mid: goboMid, near: goboNear, frame: goboFrame } };
   function goboLayer(canvas, size, density, depth, salt, mirror, frame) {
@@ -4691,7 +4718,7 @@ fn mainFragment(
   // The scene's canopy: strong under the sun, faint under the moon.
   const DAPPLE_BY_SCENE = { noon: 0.7, golden_hour: 0.9, autumn: 0.7, rain: 0.35, storm: 0.5, night: 0.25 };
   const GOBO_SUN_LIFT = 0.2;
-  let dappleDial = 1.0, dappleSway = 1.0, frameDial = 1.0;
+  let dappleDial = 1.0, dappleSway = 1.0, frameDial = 1.0, dappleGust = 1.0;
   function stepDapple(dt) {
     gobo.live = stepToward(gobo.live, gobo.base * dappleDial, 1.2, dt);
     const on = gobo.live > 0.01;
@@ -4708,8 +4735,8 @@ fn mainFragment(
       const breathe = 1 + 0.02 * amp * wobble(GOBO_SEED, L.salt + 4, t * 0.5);
       // A gust leans the canopy along itself, the near layers most and
       // quickest; it settles back slowly.
-      const gx = gust ? weather.gustVX * 90 * L.depth : 0;
-      const gy = gust ? weather.gustVY * 90 * L.depth : 0;
+      const gx = gust ? weather.gustVX * 90 * L.depth * dappleGust : 0;
+      const gy = gust ? weather.gustVY * 90 * L.depth * dappleGust : 0;
       L.leanX = stepToward(L.leanX, gx, gust ? 0.25 : 0.6, dt);
       L.leanY = stepToward(L.leanY, gy, gust ? 0.25 : 0.6, dt);
       L.sp.position.set(WALL / 2 + dx + L.leanX, WALL / 2 + dy + L.leanY);
@@ -4722,7 +4749,7 @@ fn mainFragment(
     get layers() { return gobo.layers; },
     get live() { return gobo.live; },
     get base() { return gobo.base; },
-    get dials() { return { dapple: dappleDial, sway: dappleSway, frame: frameDial }; },
+    get dials() { return { dapple: dappleDial, sway: dappleSway, frame: frameDial, gust: dappleGust }; },
     canvases: gobo.canvases,
     bank: goboBank,
     get weather() { return { ...weather, clock }; },
@@ -9578,6 +9605,12 @@ fn mainFragment(
     dappleSway = Number(dappleSwayIn.value);
     dappleSwayOut.textContent = dappleSwayIn.value;
   });
+  const dappleGustIn = document.getElementById('dapplegust');
+  const dappleGustOut = document.getElementById('dapplegustout');
+  dappleGustIn.addEventListener('input', () => {
+    dappleGust = Number(dappleGustIn.value);
+    dappleGustOut.textContent = dappleGustIn.value;
+  });
   const frameIn = document.getElementById('dappleframe');
   const frameOut = document.getElementById('dappleframeout');
   frameIn.addEventListener('input', () => {
@@ -9644,6 +9677,8 @@ fn mainFragment(
     dappleSwayOut.textContent = dappleSwayIn.value;
     frameIn.value = String(frameDial);
     frameOut.textContent = frameIn.value;
+    dappleGustIn.value = String(dappleGust);
+    dappleGustOut.textContent = dappleGustIn.value;
     for (const btn of seasonRow.querySelectorAll('button')) {
       btn.classList.toggle('on', btn.dataset.season === (season.target ?? season.current));
     }
@@ -9746,7 +9781,7 @@ fn mainFragment(
       trace: traceGain, vis: visitorGain, dens: densityDial,
       jit: sizeJitter, floor: sizeFloor, glow: glowDial, dust: dustDial, scat: scatterDial,
       drop: dropDial, mist: mistDial,
-      dap: dappleDial, dsw: dappleSway, frm: frameDial,
+      dap: dappleDial, dsw: dappleSway, frm: frameDial, dgu: dappleGust,
       style: styleOverride, season: season.target ?? season.current,
       day: livingDay,
       recolor: recolor.state(),
@@ -9767,6 +9802,7 @@ fn mainFragment(
     if (typeof p.dap === 'number') dappleDial = p.dap;
     if (typeof p.dsw === 'number') dappleSway = p.dsw;
     if (typeof p.frm === 'number') frameDial = p.frm;
+    if (typeof p.dgu === 'number') dappleGust = p.dgu;
     if (typeof p.scat === 'number') scatterDial = p.scat;
     let rebuild = false;
     if (typeof p.dens === 'number' && p.dens !== densityDial) {
@@ -9966,6 +10002,12 @@ fn mainFragment(
     }
   } else if (location.search.includes('CAM')) {
     wallCam.connect();
+  }
+  // QA affordance: '?DAPPLEQA' starts the canopy at its target instead of
+  // easing in - a headless shot cannot wait on the page's clock.
+  if (location.search.includes('DAPPLEQA')) {
+    gobo.live = gobo.base * dappleDial;
+    stepDapple(0);
   }
   // Boot straight INTO the scene: the dials start at their targets
   // rather than easing from noon.
