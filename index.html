@@ -431,18 +431,13 @@
         <div class="lab"><span>Frame</span><output id="dappleframeout">1</output></div>
         <input type="range" id="dappleframe" min="0" max="1.5" step="0.05" value="1">
       </div>
-      <div class="slider">
-        <div class="lab"><span>Birds</span><output id="birdsout">1</output></div>
-        <input type="range" id="birds" min="0" max="2" step="0.05" value="1">
-      </div>
-      <p class="note" style="margin:0"><b>Dapple</b> &mdash; a canopy cookie in front of the projector: branch and leaf shadows over everything, swaying on the wind; <b>Dapple gust</b> is how much a stroke, thunder or the Gust button leans it (0: the canopy ignores disturbances); <b>Frame</b> dirties the raster&rsquo;s edge. <b>Birds</b>: a disturbance in the forest &mdash; a burst, a touch, thunder, the camera&rsquo;s hand &mdash; sends shadow hand-puppet birds over, big and soft at the canopy&rsquo;s own focus; 0 grounds them</p>
+      <p class="note" style="margin:0"><b>Dapple</b> &mdash; a canopy cookie in front of the projector: branch and leaf shadows over everything, swaying on the wind; <b>Dapple gust</b> is how much a stroke, thunder or the Gust button leans it (0: the canopy ignores disturbances); <b>Frame</b> dirties the raster&rsquo;s edge</p>
       <div class="btnrow" id="stylerow">
         <button data-style="scene" class="on">Scene</button>
         <button data-style="print">Print</button>
         <button data-style="glow">Glow</button>
       </div>
       <button id="gust">One big gust</button>
-      <button id="flush">Flush the birds</button>
     </div>
     <div class="group">
       <div class="head">Projector</div>
@@ -4119,8 +4114,6 @@ fn mainFragment(
   // line), then resumes foraging from wherever the flight left it. No
   // draw-time displacement exists at all.
   function disturbAt(x, y) {
-    // The forest's unrest: a poke is a third of a flock.
-    if (window.birds) window.birds.startle(0.35, x, y, 0, 0);
     for (let ty = 0; ty < GRID; ty++) {
       for (let tx = 0; tx < GRID; tx++) {
         const entries = steerSims[ty * GRID + tx];
@@ -4765,204 +4758,6 @@ fn mainFragment(
     step: (dt) => stepDapple(dt),
     byScene: DAPPLE_BY_SCENE,
   };
-
-  // ---- bird shadows: hand puppets ------------------------------------------
-  // The shadow animals are SHADOW HAND PUPPETS (Kevin): two hands in the
-  // beam, thumbs hooked together for the head, the eight fingers fanned
-  // as feathers, the wrists trailing behind. Hands up by the lamp cast
-  // big, soft shadows, so a puppet bird is drawn at 96 px and shown at
-  // 650-950 px across - the canopy cookie's own focus, in the same bank,
-  // in front of everything - and beats its wings at a hand's pace. A
-  // disturbance in the forest sends them over: a FLUSH rises from the
-  // point of it and scatters off the wall (a burst, a contact, the depth
-  // camera's hand), a PASS crosses edge to edge (thunder, and now and then
-  // on its own - a forest is never still). Two to four puppets per pass,
-  // a loose line with per-puppet wobble and staggered take-off, hashed
-  // from one seed. Disturbances feed an UNREST that decays; a pass
-  // launches when it crests, at most one every BIRD_COOLDOWN seconds.
-  const BIRD_SEED = 0x81d;
-  const BIRD_FRAMES = 8;
-  const BIRD_RES = 96;
-  const BIRD_COOLDOWN = 12;
-  const BIRD_IDLE = [50, 120];
-  const BIRD_SPEED = [430, 620];
-  const BIRD_SPAN = [650, 950];
-  const BIRD_FLAP = [1.5, 2.3];
-  const BIRD_UNREST_TAU = 8;
-  const BIRD_DENSITY = 0.62;
-  let birdDial = 1.0;
-  // A finger: a rounded stroke from the knuckle, tapering to the tip.
-  function puppetFinger(ctx, x, y, ang, len, w) {
-    ctx.lineCap = 'round';
-    ctx.lineWidth = w;
-    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(ang) * len * 0.55, y + Math.sin(ang) * len * 0.55); ctx.stroke();
-    ctx.lineWidth = w * 0.7;
-    ctx.beginPath(); ctx.moveTo(x + Math.cos(ang) * len * 0.5, y + Math.sin(ang) * len * 0.5); ctx.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len); ctx.stroke();
-  }
-  // The bird: heading +x. Palms crossed for the body, thumbs hooked for
-  // the head and beak, four fingers a wing, wrists trailing. The beat
-  // fans the fingers forward and tight on the upstroke, back and wide
-  // on the downstroke.
-  const PUPPETS = {
-    bird(ctx, n, phase) {
-      const L = n * 0.6;
-      ctx.fillStyle = '#000'; ctx.strokeStyle = '#000';
-      ctx.translate(n / 2, n / 2 + n * 0.02);
-      const beat = Math.sin(phase);
-      const fan = (72 - 38 * beat) * Math.PI / 180;
-      const spread = (15 + 6 * Math.max(0, beat)) * Math.PI / 180;
-      const lens = [0.44, 0.52, 0.48, 0.4];
-      for (const sd of [-1, 1]) {
-        const kx = L * 0.04, ky = sd * L * 0.07;
-        for (let k = 0; k < 4; k++) {
-          const a = sd * (fan + (k - 1.5) * spread) - (k - 1.5) * 0.02;
-          puppetFinger(ctx, kx + (k - 1.5) * L * 0.02, ky, a, L * lens[k] * (1 - 0.08 * Math.abs(beat)), L * 0.105);
-        }
-        // The wrist, trailing back and to the side.
-        ctx.lineCap = 'round'; ctx.lineWidth = L * 0.17;
-        ctx.beginPath(); ctx.moveTo(-L * 0.08, sd * L * 0.06); ctx.lineTo(-L * 0.4, sd * L * 0.22); ctx.stroke();
-      }
-      // The body: the crossed palms.
-      ctx.beginPath(); ctx.ellipse(0, 0, L * 0.26, L * 0.15, 0, 0, Math.PI * 2); ctx.fill();
-      // The head: the hooked thumbs, and the beak.
-      ctx.beginPath(); ctx.ellipse(L * 0.3, -L * 0.02, L * 0.11, L * 0.085, -0.2, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(L * 0.37, -L * 0.06); ctx.lineTo(L * 0.5, -L * 0.01); ctx.lineTo(L * 0.38, L * 0.04); ctx.closePath(); ctx.fill();
-    },
-  };
-  function puppetFrame(kind, n, phase) {
-    const c = document.createElement('canvas');
-    c.width = n; c.height = n;
-    const ctx = c.getContext('2d');
-    PUPPETS[kind](ctx, n, phase);
-    return c;
-  }
-  const birdTex = { bird: [] };
-  for (let k = 0; k < BIRD_FRAMES; k++) {
-    const t = PIXI.Texture.from(puppetFrame('bird', BIRD_RES, k / BIRD_FRAMES * Math.PI * 2));
-    t.source.scaleMode = 'linear';
-    birdTex.bird.push(t);
-  }
-  const birdSprites = [];
-  function birdSprite(i) {
-    while (birdSprites.length <= i) {
-      const sp = new PIXI.Sprite(birdTex.bird[0]);
-      sp.anchor.set(0.5, 0.5);
-      sp.blendMode = 'multiply';
-      sp.visible = false;
-      goboBank.addChild(sp);
-      birdSprites.push(sp);
-    }
-    const sp = birdSprites[i];
-    sp.visible = true;
-    return sp;
-  }
-  const flock = [];
-  let birdSalt = 0, lastFlock = -1e9, unrest = 0, flocks = 0;
-  let nextIdle = BIRD_IDLE[0] + hashed(BIRD_SEED, 1, 1) * (BIRD_IDLE[1] - BIRD_IDLE[0]);
-  const bh = (k) => hashed(BIRD_SEED, birdSalt++, k);
-  function launch(kind, x, y, vx, vy) {
-    lastFlock = clock; flocks++;
-    const n = 2 + Math.floor(bh(1) * 3);
-    let ang, ox, oy;
-    if (kind === 'flush') {
-      // Away from the disturbance - along its own motion when it has
-      // one, else outward from the wall's centre - with an upward lean.
-      const sp = Math.hypot(vx || 0, vy || 0);
-      const away = sp > 80 ? Math.atan2(vy, vx) : Math.atan2(y - WALL / 2, x - WALL / 2);
-      const up = -Math.PI / 2;
-      let d = up - away; d = Math.atan2(Math.sin(d), Math.cos(d));
-      ang = away + d * 0.45;
-      ox = x; oy = y;
-    } else {
-      const side = Math.floor(bh(2) * 4);
-      const t = WALL * (0.2 + 0.6 * bh(3));
-      ox = side === 0 ? -600 : side === 1 ? WALL + 600 : t;
-      oy = side === 2 ? -600 : side === 3 ? WALL + 600 : t;
-      ang = Math.atan2(WALL / 2 - oy, WALL / 2 - ox) + (bh(4) - 0.5) * 0.7;
-    }
-    const speed = BIRD_SPEED[0] + bh(5) * (BIRD_SPEED[1] - BIRD_SPEED[0]);
-    for (let i = 0; i < n; i++) {
-      const sd = i % 2 ? -1 : 1;
-      const back = kind === 'flush' ? bh(7) * 260 : i * 320 + bh(7) * 120;
-      const side = kind === 'flush' ? (bh(8) - 0.5) * 520 : sd * (i * 160 + bh(8) * 120);
-      flock.push({
-        x: ox - Math.cos(ang) * back - Math.sin(ang) * side,
-        y: oy - Math.sin(ang) * back + Math.cos(ang) * side,
-        ang: ang + (bh(9) - 0.5) * 0.25,
-        v: kind === 'flush' ? 160 : speed * (0.92 + 0.16 * bh(10)),
-        vTarget: speed * (0.92 + 0.16 * bh(10)),
-        delay: kind === 'flush' ? bh(11) * 0.9 : bh(11) * 0.4,
-        span: BIRD_SPAN[0] + bh(12) * (BIRD_SPAN[1] - BIRD_SPAN[0]),
-        phase: bh(13) * Math.PI * 2, hz: BIRD_FLAP[0] + bh(14) * (BIRD_FLAP[1] - BIRD_FLAP[0]),
-        salt: birdSalt, age: 0, alive: true,
-      });
-    }
-  }
-  function startle(strength, x, y, vx, vy, kind) {
-    if (birdDial <= 0) return false;
-    unrest = Math.min(2, unrest + strength);
-    if (unrest < 1 || clock - lastFlock < BIRD_COOLDOWN) return false;
-    unrest = 0;
-    launch(kind || 'flush', x, y, vx, vy);
-    return true;
-  }
-  function stepBirds(dt) {
-    unrest *= Math.exp(-dt / BIRD_UNREST_TAU);
-    if (birdDial > 0 && clock >= nextIdle) {
-      nextIdle = clock + BIRD_IDLE[0] + bh(15) * (BIRD_IDLE[1] - BIRD_IDLE[0]);
-      if (clock - lastFlock >= BIRD_COOLDOWN) launch('pass', WALL / 2, WALL / 2, 0, 0);
-    }
-    let alive = 0;
-    for (const b of flock) {
-      if (!b.alive) continue;
-      b.age += dt;
-      if (b.age < b.delay) { alive++; continue; }
-      const t = b.age - b.delay;
-      b.v += (b.vTarget - b.v) * (1 - Math.exp(-dt / 0.8));
-      b.ang += 0.35 * wobble(BIRD_SEED, b.salt, t * 0.6) * dt;
-      b.x += Math.cos(b.ang) * b.v * dt;
-      b.y += Math.sin(b.ang) * b.v * dt;
-      b.phase += b.hz * Math.PI * 2 * dt;
-      if (b.x < -900 || b.y < -900 || b.x > WALL + 900 || b.y > WALL + 900) { b.alive = false; continue; }
-      alive++;
-    }
-    if (alive === 0 && flock.length) flock.length = 0;
-    if (alive > 0) goboBank.visible = true;
-    return alive;
-  }
-  let birdsUsed = 0;
-  function drawBirds() {
-    for (let i = 0; i < birdsUsed; i++) birdSprites[i].visible = false;
-    birdsUsed = 0;
-    for (const b of flock) {
-      if (!b.alive || b.age < b.delay) continue;
-      const sp = birdSprite(birdsUsed++);
-      const u = ((b.phase / (Math.PI * 2)) % 1 + 1) % 1;
-      sp.texture = birdTex.bird[Math.floor(u * BIRD_FRAMES) % BIRD_FRAMES];
-      // The body lifts on the downstroke, across the heading.
-      const bob = -0.04 * b.span * Math.sin(b.phase);
-      sp.position.set(b.x - Math.sin(b.ang) * bob, b.y + Math.cos(b.ang) * bob);
-      sp.rotation = b.ang;
-      const size = b.span * (0.75 + 0.25 * Math.min(1, birdDial));
-      sp.width = size; sp.height = size;
-      sp.alpha = BIRD_DENSITY * Math.min(1, birdDial);
-    }
-  }
-  const birds = {
-    startle,
-    flush: (x, y, vx, vy) => { launch('flush', x, y, vx, vy); },
-    pass: () => { launch('pass', WALL / 2, WALL / 2, 0, 0); },
-    step: (dt) => { const n = stepBirds(dt); drawBirds(); return n; },
-    count: () => flock.filter((b) => b.alive).length,
-    get active() { return flock.some((b) => b.alive); },
-    get unrest() { return unrest; },
-    get flocks() { return flocks; },
-    get dial() { return birdDial; },
-    positions: () => flock.filter((b) => b.alive).map((b) => [Math.round(b.x), Math.round(b.y), +b.ang.toFixed(2), Math.round(b.span)]),
-    frames: birdTex,
-    puppetFrame,
-  };
-  window.birds = birds;
 
   // ---- recolor: the beam re-inks the blooms ------------------------------
   // observed = print x light, so a colored beam inside a WHITE petal's
@@ -7145,8 +6940,6 @@ fn mainFragment(
       const ang = k * Math.PI / 4;
       probe(wx + Math.cos(ang) * r, wy + Math.sin(ang) * r);
     }
-    // A bloom bursting is a whole disturbance: the birds flush from it.
-    if (converted > 0) birds.startle(1, wx, wy, vx, vy);
     return converted;
   }
   // The entry for any other motion source (the depth camera's blobs).
@@ -8039,8 +7832,6 @@ fn mainFragment(
     }
     drawFog(dt);
     stepDapple(dt);
-    stepBirds(dt);
-    drawBirds();
     tickStormAir();
 
     // Snow: the same sim as rain, flutter on, every landing handed to the
@@ -8112,8 +7903,6 @@ fn mainFragment(
       weather.gustVY = 0.25;
       weather.gustPower = 1.0;
       weather.gustUntil = Math.max(weather.gustUntil, clock + 0.9);
-      // Thunder sends a flock across.
-      birds.startle(1, WALL / 2, WALL / 2, 0, 0, 'pass');
     }
     prevLift = lift;
     strikeQuad.alpha = lift;
@@ -9822,12 +9611,6 @@ fn mainFragment(
     dappleGust = Number(dappleGustIn.value);
     dappleGustOut.textContent = dappleGustIn.value;
   });
-  const birdsIn = document.getElementById('birds');
-  const birdsOut = document.getElementById('birdsout');
-  birdsIn.addEventListener('input', () => {
-    birdDial = Number(birdsIn.value);
-    birdsOut.textContent = birdsIn.value;
-  });
   const frameIn = document.getElementById('dappleframe');
   const frameOut = document.getElementById('dappleframeout');
   frameIn.addEventListener('input', () => {
@@ -9849,9 +9632,6 @@ fn mainFragment(
       }
     });
   }
-  document.getElementById('flush').addEventListener('click', () => {
-    birds.flush(WALL * (0.35 + 0.3 * hashed(BIRD_SEED, Math.floor(clock * 7) >>> 0, 21)), WALL * 0.6, 0, 0);
-  });
   document.getElementById('gust').addEventListener('click', () => {
     weather.gustUntil = clock + 1.4;
     weather.gustPower = 1.1;
@@ -9899,8 +9679,6 @@ fn mainFragment(
     frameOut.textContent = frameIn.value;
     dappleGustIn.value = String(dappleGust);
     dappleGustOut.textContent = dappleGustIn.value;
-    birdsIn.value = String(birdDial);
-    birdsOut.textContent = birdsIn.value;
     for (const btn of seasonRow.querySelectorAll('button')) {
       btn.classList.toggle('on', btn.dataset.season === (season.target ?? season.current));
     }
@@ -10003,7 +9781,7 @@ fn mainFragment(
       trace: traceGain, vis: visitorGain, dens: densityDial,
       jit: sizeJitter, floor: sizeFloor, glow: glowDial, dust: dustDial, scat: scatterDial,
       drop: dropDial, mist: mistDial,
-      dap: dappleDial, dsw: dappleSway, frm: frameDial, dgu: dappleGust, brd: birdDial,
+      dap: dappleDial, dsw: dappleSway, frm: frameDial, dgu: dappleGust,
       style: styleOverride, season: season.target ?? season.current,
       day: livingDay,
       recolor: recolor.state(),
@@ -10025,7 +9803,6 @@ fn mainFragment(
     if (typeof p.dsw === 'number') dappleSway = p.dsw;
     if (typeof p.frm === 'number') frameDial = p.frm;
     if (typeof p.dgu === 'number') dappleGust = p.dgu;
-    if (typeof p.brd === 'number') birdDial = p.brd;
     if (typeof p.scat === 'number') scatterDial = p.scat;
     let rebuild = false;
     if (typeof p.dens === 'number' && p.dens !== densityDial) {
@@ -10228,16 +10005,9 @@ fn mainFragment(
   }
   // QA affordance: '?DAPPLEQA' starts the canopy at its target instead of
   // easing in - a headless shot cannot wait on the page's clock.
-  if (location.search.includes('DAPPLEQA') || location.search.includes('BIRDQA')) {
+  if (location.search.includes('DAPPLEQA')) {
     gobo.live = gobo.base * dappleDial;
     stepDapple(0);
-  }
-  // '?BIRDQA': a flock flushed from the wall's middle, already 1.2 s into
-  // its climb, so a first frame shows it over the print.
-  if (location.search.includes('BIRDQA')) {
-    birds.flush(WALL * 0.5, WALL * 0.62, 500, -300);
-    for (let k = 0; k < 72; k++) stepBirds(1 / 60);
-    drawBirds();
   }
   // Boot straight INTO the scene: the dials start at their targets
   // rather than easing from noon.
