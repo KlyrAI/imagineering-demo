@@ -415,6 +415,19 @@
         <div class="lab"><span>Mist</span><output id="mistout">1</output></div>
         <input type="range" id="mist" min="0" max="2" step="0.05" value="1">
       </div>
+      <div class="slider">
+        <div class="lab"><span>Dapple</span><output id="dappleout">1</output></div>
+        <input type="range" id="dapple" min="0" max="2" step="0.05" value="1">
+      </div>
+      <div class="slider">
+        <div class="lab"><span>Dapple sway</span><output id="dappleswayout">1</output></div>
+        <input type="range" id="dapplesway" min="0" max="2" step="0.05" value="1">
+      </div>
+      <div class="slider">
+        <div class="lab"><span>Frame</span><output id="dappleframeout">1</output></div>
+        <input type="range" id="dappleframe" min="0" max="1.5" step="0.05" value="1">
+      </div>
+      <p class="note" style="margin:0"><b>Dapple</b> &mdash; a canopy cookie in front of the projector: branch and leaf shadows over everything, swaying on the wind; <b>Frame</b> dirties the raster&rsquo;s edge</p>
       <div class="btnrow" id="stylerow">
         <button data-style="scene" class="on">Scene</button>
         <button data-style="print">Print</button>
@@ -579,7 +592,7 @@
         <div class="lab"><span>Edge gain</span><output id="rcsgout">1.2</output></div>
         <input type="range" id="rcsg" min="0" max="4" step="0.1" value="1.2">
       </div>
-      <p class="note" style="margin:0"><b>Camera</b> &mdash; the depth camera&rsquo;s hands are contacts (<code>tools/depthcam.py</code>)</p>
+      <p class="note" style="margin:0"><b>Camera</b> &mdash; the depth camera&rsquo;s shadows disrupt the blooms and critters (<code>tools/depthcam.py</code>)</p>
       <div class="rcrow">
         <input type="text" id="dcamurl" value="ws://127.0.0.1:8765" spellcheck="false">
         <button id="dcamon">Camera</button>
@@ -587,6 +600,7 @@
       <div class="rcrow">
         <span class="lab">Show</span>
         <button id="dcamblobs" class="on">Blobs</button>
+        <button id="dcamghost">Ghost</button>
         <button id="dcamdepth">Depth view</button>
       </div>
       <div class="slider">
@@ -596,6 +610,10 @@
       <div class="slider">
         <div class="lab"><span>Touch depth mm</span><output id="dcamtouchout">400</output></div>
         <input type="range" id="dcamtouch" min="20" max="400" step="10" value="400">
+      </div>
+      <div class="slider">
+        <div class="lab"><span>Regrow s</span><output id="dcamregrowout">3</output></div>
+        <input type="range" id="dcamregrow" min="0" max="10" step="0.5" value="3">
       </div>
       <p class="note" id="dcamnote" style="margin:0">camera: off</p>
       <p class="note" style="margin:0"><b>Outline</b> &mdash; the wall&rsquo;s dials, every outlined bloom</p>
@@ -4504,6 +4522,216 @@ fn mainFragment(
   lightScene.addChildAt(baseQuad, 0);
   lightScene.addChild(strikeQuad);
 
+  // ---- dappled light: the canopy cookie ----------------------------------
+  // A cookie (gobo) is a cut-out of branches in front of the lamp: it
+  // throws foliage shadows on the set, breaks the beam's hard rectangle
+  // and puts a foreground in front of everything. The lamp is the
+  // projector, so the cookie is the LAST multiply in the light scene -
+  // base light, recolor, critters, sparkles, the strike, all pass
+  // through it (a firefly crossing a branch dims: that is the depth).
+  // Three cookies at three distances, every silhouette hashed from one
+  // seed (the same wall boots every time), drawn at reduced resolution
+  // so the upscale IS the softness of a cut-out far from focus: a far
+  // canopy of leaf blobs (two copies drifting against each other, so
+  // their overlaps flicker like real dapple), mid branches reaching in
+  // from off-frame, near branches entering from the four edges, and the
+  // frame itself - an irregular soft dark border that dirties the
+  // raster's edge. They sway with the wall's wind, lean into its gusts,
+  // the near ones most (Kevin: "dirtying the frame", "shooting through",
+  // "soften the projection edge", "more depth").
+  const GOBO_SEED = 0x6b0;
+  const goboBank = new PIXI.Container();
+  lightScene.addChild(goboBank);
+  let goboSalt = 0;
+  const gh = (k) => hashed(GOBO_SEED, goboSalt++, k);
+  function goboCanvas(n) {
+    const c = document.createElement('canvas');
+    c.width = n; c.height = n;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, n, n);
+    ctx.fillStyle = '#000'; ctx.strokeStyle = '#000';
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    return ctx;
+  }
+  function goboLeaf(ctx, x, y, ang, len) {
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(ang);
+    ctx.beginPath();
+    ctx.ellipse(len * 0.5, 0, len * 0.5, len * 0.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  function goboCluster(ctx, x, y, ang, n, len) {
+    for (let i = 0; i < n; i++) {
+      const a = ang + (gh(1) - 0.5) * 2.2;
+      const d = gh(2) * len * 0.6;
+      goboLeaf(ctx, x + Math.cos(a) * d, y + Math.sin(a) * d, a + (gh(3) - 0.5) * 0.8, len * (0.7 + 0.6 * gh(4)));
+    }
+  }
+  function goboBranch(ctx, x, y, ang, len, width, depth, leafLen) {
+    const bend = (gh(5) - 0.5) * 0.9;
+    const mx = x + Math.cos(ang + bend) * len * 0.5, my = y + Math.sin(ang + bend) * len * 0.5;
+    const ex = x + Math.cos(ang) * len, ey = y + Math.sin(ang) * len;
+    ctx.lineWidth = width;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.quadraticCurveTo(mx, my, ex, ey); ctx.stroke();
+    if (depth <= 1) {
+      // Leaves along the twig, and a cluster at its tip.
+      const along = 2 + Math.floor(gh(40) * 2);
+      for (let i = 0; i < along; i++) {
+        const t = 0.25 + 0.65 * gh(41), side = gh(42) < 0.5 ? -1 : 1;
+        goboLeaf(ctx, x + (ex - x) * t, y + (ey - y) * t, ang + side * (0.9 + 0.5 * gh(43)), leafLen * (0.5 + 0.3 * gh(44)));
+      }
+    }
+    if (depth <= 0) { goboCluster(ctx, ex, ey, ang, 3 + Math.floor(gh(6) * 4), leafLen); return; }
+    const kids = 2 + (gh(7) < 0.4 ? 1 : 0);
+    for (let k = 0; k < kids; k++) {
+      goboBranch(ctx, ex, ey, ang + (gh(8) - 0.5) * 1.3, len * (0.6 + 0.2 * gh(9)), width * 0.65, depth - 1, leafLen);
+    }
+    if (depth >= 2 && gh(10) < 0.5) {
+      const t = 0.3 + 0.5 * gh(11);
+      goboBranch(ctx, x + (ex - x) * t, y + (ey - y) * t, ang + (gh(12) < 0.5 ? -1 : 1) * (0.6 + 0.5 * gh(13)),
+                 len * 0.45, width * 0.5, 1, leafLen);
+    }
+  }
+  // Far: a canopy of leaf blobs, very soft.
+  const goboFar = (() => {
+    const n = 320, ctx = goboCanvas(n);
+    for (let i = 0; i < 34; i++) {
+      goboCluster(ctx, gh(14) * n, gh(15) * n, gh(16) * Math.PI * 2, 3 + Math.floor(gh(17) * 4), 6 + gh(18) * 5);
+    }
+    for (let i = 0; i < 8; i++) {
+      goboBranch(ctx, gh(19) * n, gh(20) * n, gh(21) * Math.PI * 2, 30 + gh(22) * 30, 1.6, 1, 7);
+    }
+    return ctx.canvas;
+  })();
+  // Mid: branches reaching in from off-frame, soft.
+  const goboMid = (() => {
+    const n = 640, ctx = goboCanvas(n);
+    for (let i = 0; i < 5; i++) {
+      const side = Math.floor(gh(23) * 4), t = gh(24) * n;
+      const x = side === 0 ? -30 : side === 1 ? n + 30 : t;
+      const y = side === 2 ? -30 : side === 3 ? n + 30 : t;
+      const inward = Math.atan2(n / 2 - y, n / 2 - x) + (gh(25) - 0.5) * 1.2;
+      goboBranch(ctx, x, y, inward, 110 + gh(26) * 50, 6 + gh(27) * 3, 3 + (gh(28) < 0.4 ? 1 : 0), 14 + gh(29) * 6);
+    }
+    return ctx.canvas;
+  })();
+  // Near: thick branches entering from the four edges, least soft.
+  const goboNear = (() => {
+    const n = 1024, ctx = goboCanvas(n);
+    for (let side = 0; side < 4; side++) {
+      const count = 2 + (gh(30) < 0.35 ? 1 : 0);
+      for (let i = 0; i < count; i++) {
+        const t = n * (0.1 + 0.8 * gh(31));
+        const x = side === 0 ? -50 : side === 1 ? n + 50 : t;
+        const y = side === 2 ? -50 : side === 3 ? n + 50 : t;
+        const inward = side === 0 ? 0 : side === 1 ? Math.PI : side === 2 ? Math.PI / 2 : -Math.PI / 2;
+        goboBranch(ctx, x, y, inward + (gh(32) - 0.5) * 1.4, 140 + gh(33) * 60, 11 + gh(34) * 4, 4, 22 + gh(35) * 8);
+      }
+    }
+    return ctx.canvas;
+  })();
+  // The frame: an irregular soft dark border whose inner edge wanders,
+  // leaves along it - the raster's rectangle, dirtied.
+  const goboFrame = (() => {
+    const n = 1024, ctx = goboCanvas(n);
+    // A point on the canvas perimeter at u in [0, 1) and its inward normal.
+    const perim = (u) => {
+      const w = (u * 4) % 4, side = Math.floor(w), t = (w - side) * n;
+      if (side === 0) return { x: t, y: 0, nx: 0, ny: 1 };
+      if (side === 1) return { x: n, y: t, nx: -1, ny: 0 };
+      if (side === 2) return { x: n - t, y: n, nx: 0, ny: -1 };
+      return { x: 0, y: n - t, nx: 1, ny: 0 };
+    };
+    const inset = (u) => 70 + 45 * wobble(GOBO_SEED, 900, u * 9) + 20 * wobble(GOBO_SEED, 901, u * 31);
+    const ring = (k) => {
+      ctx.beginPath();
+      ctx.rect(-4, -4, n + 8, n + 8);
+      const steps = 320;
+      for (let i = 0; i <= steps; i++) {
+        const u = (i % steps) / steps;
+        const q = perim(u), ins = inset(u) * k;
+        // The inner edge, inset along the side's normal; the corners chamfer where two sides meet.
+        const cx = q.x + q.nx * ins, cy = q.y + q.ny * ins;
+        if (i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+      }
+      ctx.closePath();
+      ctx.fill('evenodd');
+    };
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    for (const k of [1.0, 0.82, 0.64, 0.46]) ring(k);
+    ctx.fillStyle = '#000';
+    for (let i = 0; i < 90; i++) {
+      const u = gh(36);
+      const q = perim(u), ins = inset(u) * (0.5 + 0.7 * gh(37));
+      goboCluster(ctx, q.x + q.nx * ins, q.y + q.ny * ins, Math.atan2(q.ny, q.nx), 3 + Math.floor(gh(38) * 4), 14 + gh(39) * 12);
+    }
+    return ctx.canvas;
+  })();
+  const gobo = { layers: [], live: 0, base: 0.5, canvases: { far: goboFar, mid: goboMid, near: goboNear, frame: goboFrame } };
+  function goboLayer(canvas, size, density, depth, salt, mirror, frame) {
+    const tex = PIXI.Texture.from(canvas);
+    tex.source.scaleMode = 'linear';
+    const sp = new PIXI.Sprite(tex);
+    sp.anchor.set(0.5, 0.5);
+    sp.position.set(WALL / 2, WALL / 2);
+    sp.width = size; sp.height = size;
+    if (mirror) sp.scale.x *= -1;
+    sp.blendMode = 'multiply';
+    goboBank.addChild(sp);
+    const L = { sp, sx: sp.scale.x, sy: sp.scale.y, density, depth, salt, frame: !!frame, leanX: 0, leanY: 0 };
+    gobo.layers.push(L);
+    return L;
+  }
+  goboLayer(goboFar, WALL * 1.45, 0.3, 0.4, 100, false, false);
+  goboLayer(goboFar, WALL * 1.45, 0.28, 0.45, 110, true, false);
+  goboLayer(goboMid, WALL * 1.4, 0.45, 0.7, 120, false, false);
+  goboLayer(goboNear, WALL * 1.35, 0.7, 1.0, 130, false, false);
+  goboLayer(goboFrame, WALL * 1.06, 0.85, 0.12, 140, false, true);
+  // The scene's canopy: strong under the sun, faint under the moon.
+  const DAPPLE_BY_SCENE = { noon: 0.7, golden_hour: 0.9, autumn: 0.7, rain: 0.35, storm: 0.5, night: 0.25 };
+  const GOBO_SUN_LIFT = 0.2;
+  let dappleDial = 1.0, dappleSway = 1.0, frameDial = 1.0;
+  function stepDapple(dt) {
+    gobo.live = stepToward(gobo.live, gobo.base * dappleDial, 1.2, dt);
+    const on = gobo.live > 0.01;
+    goboBank.visible = on;
+    if (!on) return;
+    const wind = 0.5 + weather.wind;
+    const gust = clock < weather.gustUntil;
+    for (const L of gobo.layers) {
+      const amp = L.depth * dappleSway * wind;
+      const t = clock * (0.08 + 0.05 * L.depth);
+      const rot = 0.02 * amp * wobble(GOBO_SEED, L.salt + 1, t);
+      const dx = 60 * amp * wobble(GOBO_SEED, L.salt + 2, t * 0.7);
+      const dy = 40 * amp * wobble(GOBO_SEED, L.salt + 3, t * 0.9);
+      const breathe = 1 + 0.02 * amp * wobble(GOBO_SEED, L.salt + 4, t * 0.5);
+      // A gust leans the canopy along itself, the near layers most and
+      // quickest; it settles back slowly.
+      const gx = gust ? weather.gustVX * 90 * L.depth : 0;
+      const gy = gust ? weather.gustVY * 90 * L.depth : 0;
+      L.leanX = stepToward(L.leanX, gx, gust ? 0.25 : 0.6, dt);
+      L.leanY = stepToward(L.leanY, gy, gust ? 0.25 : 0.6, dt);
+      L.sp.position.set(WALL / 2 + dx + L.leanX, WALL / 2 + dy + L.leanY);
+      L.sp.rotation = rot + L.leanX * 0.0004;
+      L.sp.scale.set(L.sx * breathe, L.sy * breathe);
+      L.sp.alpha = gobo.live * L.density * (L.frame ? frameDial : 1);
+    }
+  }
+  window.gobo = {
+    get layers() { return gobo.layers; },
+    get live() { return gobo.live; },
+    get base() { return gobo.base; },
+    get dials() { return { dapple: dappleDial, sway: dappleSway, frame: frameDial }; },
+    canvases: gobo.canvases,
+    bank: goboBank,
+    get weather() { return { ...weather, clock }; },
+    get sun() { return 1 + GOBO_SUN_LIFT * gobo.live; },
+    // QA: drive the canopy without a frame (pair with wallDebug.advance).
+    step: (dt) => stepDapple(dt),
+    byScene: DAPPLE_BY_SCENE,
+  };
+
   // ---- recolor: the beam re-inks the blooms ------------------------------
   // observed = print x light, so a colored beam inside a WHITE petal's
   // silhouette recolors it outright, and inside a pink one only tints.
@@ -5369,6 +5597,7 @@ fn mainFragment(
     instances: rcInstances,
     at: flowerAt,
     instanceAt,
+    refill: erodeRefill,
   };
   const recolorListeners = [];
   function recolorChanged() {
@@ -5639,6 +5868,7 @@ fn mainFragment(
     for (const flock of FLOCK) flock.count = scene.visitors[flock.species];
     dustCount = scene.dust || 0;
     fogBase = scene.fog || 0;
+    gobo.base = DAPPLE_BY_SCENE[name] ?? 0.5;
     rebuildSteer();
     visitorTheme = scene.visitorTheme;
     styleOverride = 'scene';
@@ -6863,26 +7093,35 @@ fn mainFragment(
   // homography. Here every blob is what the pointer is: its tip is a
   // contact tested on every packet (explosion on contact + vector, the
   // velocity tracked in world px exactly like the pointer's), its motion
-  // stirs the air and startles the critters. The overlay is a DOM canvas
-  // over the stage - screen space, so it stays right when the canvas is
-  // warped onto the wall - showing the rings, the calibration targets
-  // and, on request, the camera's own height map warped onto the page.
+  // stirs the air and startles the critters. With the camera riding the
+  // projector every packet is a SHADOW: the occluder's outline cast onto
+  // the wall as page fractions. A lit bloom the shadow reaches bursts as
+  // its edge arrives, stays dark beneath it (the projector's light is not
+  // on the wall there) and refills once it has passed; the critters flee
+  // its edge. The overlay is a DOM canvas over the stage - screen space,
+  // so it stays right when the canvas is warped onto the wall - showing
+  // the rings, the ghost outline, the calibration's pictures (black, a
+  // disc, white) and, on request, the camera's own height map.
   const CAM_DEFAULT_URL = 'ws://127.0.0.1:8765';
   const CAM_KEY = 'wallCam.v1';
   const CAM_STALE = 0.3;
+  const CAM_FLEE_STEP = 120;      // a disturbance every this far along a shadow's edge (the critters' FLEE_RADIUS)
   const wallCam = (() => {
-    const cfg = { url: CAM_DEFAULT_URL, contact: 28, touch: 400, blobs: true, depth: false };
+    const cfg = { url: CAM_DEFAULT_URL, contact: 28, touch: 400, blobs: true, depth: false, ghost: false, regrow: 3 };
     try { Object.assign(cfg, JSON.parse(localStorage.getItem(CAM_KEY) || '{}')); } catch (err) { /* private mode */ }
     const view = document.getElementById('dcamview');
     const ctx = view.getContext('2d');
     const st = { sock: null, want: false, linked: false, fps: 0, hands: 0, text: 'off', retry: null,
                  tracks: new Map(), packet: null, consumed: null, packetAt: -1, target: null,
-                 thumb: null, status: null, dirty: false, packets: 0, qa: null };
+                 thumb: null, status: null, dirty: false, packets: 0, qa: null,
+                 cal: null, ghost: false, shaded: new Map() };
     const listeners = [];
     function save() { try { localStorage.setItem(CAM_KEY, JSON.stringify(cfg)); } catch (err) { /* private mode */ } }
     function note() { for (const fn of listeners) fn(); }
     function tell(obj) { if (st.sock && st.sock.readyState === 1) st.sock.send(JSON.stringify(obj)); }
-    function hello() { tell({ type: 'hello', w: wrap.clientWidth, h: wrap.clientHeight }); }
+    function hello() {
+      tell({ type: 'hello', w: wrap.clientWidth, h: wrap.clientHeight, mode: proj.on ? 'project' : 'window' });
+    }
     function schedule() {
       if (!st.want || st.retry) return;
       st.retry = setTimeout(() => { st.retry = null; open(); }, 2000);
@@ -6914,14 +7153,17 @@ fn mainFragment(
       st.linked = false; dropAll(); st.text = 'off'; note();
     }
     function dropAll() {
+      uncover(new Set());
       st.tracks.clear(); st.packet = null; st.consumed = null; st.target = null;
-      st.thumb = null; st.status = null; st.hands = 0;
+      st.thumb = null; st.status = null; st.hands = 0; st.cal = null; st.ghost = false;
     }
     // The socket's entry - and the probes'.
     function feed(m) {
       if (!m || typeof m !== 'object') return;
-      if (m.type === 'blobs') {
-        st.packet = m; st.packetAt = clock; st.hands = (m.blobs || []).length; st.packets += 1;
+      if (m.type === 'shadows' || m.type === 'blobs') {
+        st.packet = m; st.packetAt = clock; st.hands = (m.shadows || m.blobs || []).length; st.packets += 1;
+      } else if (m.type === 'cal') {
+        applyCal(m);
       } else if (m.type === 'status') {
         st.status = m; st.fps = m.fps || 0;
         if (typeof m.text === 'string') st.text = m.text;
@@ -6934,6 +7176,17 @@ fn mainFragment(
         img.src = 'data:image/png;base64,' + m.png;
       }
     }
+    // The calibration's pictures - black, a white disc, white, the whole
+    // raster over everything - a label, and the ghost outline for the check.
+    function applyCal(m) {
+      if (m.op === 'clear') { st.cal = null; st.ghost = false; }
+      else if (m.op === 'ghost') st.ghost = !!m.on;
+      else if (m.op === 'text') st.cal = { ...(st.cal || { op: 'none', x: 0, y: 0, r: 0 }), text: String(m.text || '') };
+      else if (m.op === 'blank' || m.op === 'flood' || m.op === 'disc') {
+        st.cal = { op: m.op, x: Number(m.x) || 0, y: Number(m.y) || 0, r: Number(m.r) || 0.025, text: st.cal ? st.cal.text : '' };
+      }
+      st.dirty = true; note();
+    }
     // The bridge's own velocity (fractions/s) gives the first contact a vector.
     function seedVelocity(tr, b, w, h) {
       if (!(Number.isFinite(b.vx) && Number.isFinite(b.vy)) || (b.vx === 0 && b.vy === 0)) return;
@@ -6941,46 +7194,128 @@ fn mainFragment(
       const ahead = screenToWorld((b.x + b.vx * 0.1) * w, (b.y + b.vy * 0.1) * h);
       if (here && ahead) { tr.vx = (ahead.x - here.x) * 10; tr.vy = (ahead.y - here.y) * 10; }
     }
+    function polyToWorld(poly, w, h) {
+      if (!Array.isArray(poly) || poly.length < 3) return null;
+      const out = [];
+      for (const p of poly) {
+        if (!Array.isArray(p) || !Number.isFinite(p[0]) || !Number.isFinite(p[1])) continue;
+        const q = screenToWorld(p[0] * w, p[1] * h, false);
+        if (q) out.push([q.x, q.y]);
+      }
+      return out.length >= 3 ? out : null;
+    }
+    function pointInPoly(x, y, poly) {
+      let inside = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const [xi, yi] = poly[i], [xj, yj] = poly[j];
+        if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+      }
+      return inside;
+    }
+    function distToPoly(x, y, poly) {
+      let best = Infinity;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const [ax, ay] = poly[j], [bx, by] = poly[i];
+        const dx = bx - ax, dy = by - ay;
+        const l2 = dx * dx + dy * dy;
+        const u = l2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l2)) : 0;
+        best = Math.min(best, Math.hypot(x - (ax + dx * u), y - (ay + dy * u)));
+      }
+      return best;
+    }
+    // A bloom whose centre the shadow covers (or comes within Contact px of
+    // its edge) bursts once, as the edge reaches it, along the shadow's
+    // motion; it stays dark under the shadow and refills once the shadow
+    // has passed (Regrow s; 0 keeps the old doctrine - dark until new light).
+    function shade(tr, covered) {
+      const margin = cfg.contact;
+      for (const inst of recolor.instances) {
+        const bx = inst.sprite.x + inst.f.lx, by = inst.sprite.y + inst.f.ly;
+        if (!pointInPoly(bx, by, tr.poly) && distToPoly(bx, by, tr.poly) > margin) continue;
+        covered.add(inst);
+        if (st.shaded.has(inst)) continue;
+        st.shaded.set(inst, { t: clock, id: tr.id });
+        if (inst.sprite.visible && inst.sprite.alpha >= 0.05) sparkfield.sweep(bx, by, tr.vx, tr.vy, margin);
+      }
+    }
+    function uncover(covered) {
+      for (const inst of [...st.shaded.keys()]) {
+        if (covered.has(inst)) continue;
+        st.shaded.delete(inst);
+        if (cfg.regrow > 0) recolor.refill(inst, cfg.regrow);
+      }
+    }
+    // The critters flee the shadow's edge: a disturbance every CAM_FLEE_STEP
+    // along its outline whenever it has moved, six times a second at most.
+    function startle(tr) {
+      if (clock - tr.dt < 1 / 6) return;
+      if (tr.dx !== null && Math.hypot(tr.cx - tr.dx, tr.cy - tr.dy) < 8) return;
+      tr.dt = clock; tr.dx = tr.cx; tr.dy = tr.cy;
+      const poly = tr.poly;
+      let calls = 0, carry = 0;
+      for (let i = 0; i < poly.length && calls < 24; i++) {
+        const a = poly[i], b = poly[(i + 1) % poly.length];
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        let s = carry;
+        while (s <= len && calls < 24) {
+          const u = len > 0 ? s / len : 0;
+          disturbAt(a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u);
+          calls++; s += CAM_FLEE_STEP;
+        }
+        carry = s - len;
+      }
+    }
     function ingest(m) {
       const w = wrap.clientWidth || 1, h = wrap.clientHeight || 1;
       const t = Number.isFinite(m.t) ? m.t : clock;
       const seen = new Set();
+      const covered = new Set();
       let fastest = null;
-      for (const b of (m.blobs || [])) {
+      for (const b of (m.shadows || m.blobs || [])) {
         if (!Number.isFinite(b.x) || !Number.isFinite(b.y)) continue;
         seen.add(b.id);
         const at = screenToWorld(b.x * w, b.y * h);
         let tr = st.tracks.get(b.id);
         if (!at) { if (tr) tr.off = true; continue; }
+        // The entity moves by its centroid (the tip is the contact); the
+        // centroid may sit past the wall quad, so it goes through unclipped.
+        const c = (Number.isFinite(b.cx) && Number.isFinite(b.cy)) ? screenToWorld(b.cx * w, b.cy * h, false) : null;
+        const ref = c || at;
         if (!tr) {
-          tr = { id: b.id, x: at.x, y: at.y, vx: 0, vy: 0, t, n: 0, hot: false, off: false,
-                 sx: b.x, sy: b.y, r: b.r || 0, z: 0 };
+          tr = { id: b.id, x: at.x, y: at.y, cx: ref.x, cy: ref.y, vx: 0, vy: 0, t, n: 0, hot: false, off: false,
+                 sx: b.x, sy: b.y, r: b.r || 0, z: 0, area: 0, poly: null, spoly: null, dx: null, dy: null, dt: -1 };
           seedVelocity(tr, b, w, h);
           st.tracks.set(b.id, tr);
         } else {
           const dt = Math.max(1e-3, t - tr.t);
           const blend = Math.min(1, dt * 12);
-          tr.vx += ((at.x - tr.x) / dt - tr.vx) * blend;
-          tr.vy += ((at.y - tr.y) / dt - tr.vy) * blend;
+          tr.vx += ((ref.x - tr.cx) / dt - tr.vx) * blend;
+          tr.vy += ((ref.y - tr.cy) / dt - tr.vy) * blend;
         }
-        tr.x = at.x; tr.y = at.y; tr.t = t; tr.n += 1; tr.off = false;
+        tr.x = at.x; tr.y = at.y; tr.cx = ref.x; tr.cy = ref.y; tr.t = t; tr.n += 1; tr.off = false;
         tr.sx = b.x; tr.sy = b.y; tr.r = b.r || 0; tr.z = Number.isFinite(b.z) ? b.z : 0;
+        tr.area = Number.isFinite(b.area) ? b.area : 0;
+        tr.spoly = (Array.isArray(b.poly) && b.poly.length >= 3) ? b.poly : null;
+        tr.poly = tr.spoly ? polyToWorld(tr.spoly, w, h) : null;
         // Within Touch depth of the wall, the tip is a contact.
         tr.hot = tr.z <= cfg.touch;
         if (tr.hot) sparkfield.sweep(tr.x, tr.y, tr.vx, tr.vy, cfg.contact);
+        // The shadow itself: the blooms it reaches burst, the critters flee its edge.
+        if (tr.poly) { shade(tr, covered); startle(tr); }
         const sp = Math.hypot(tr.vx, tr.vy);
         if (!fastest || sp > fastest.sp) fastest = { tr, sp };
       }
       for (const id of [...st.tracks.keys()]) if (!seen.has(id)) st.tracks.delete(id);
+      uncover(covered);
       if (fastest) {
-        // The fastest hand is the stirring force the pointer used to be,
+        // The fastest shadow is the stirring force the pointer used to be,
         // and a brisk one startles the critters near it.
         const tr = fastest.tr;
-        cameraForce.x = tr.x; cameraForce.y = tr.y;
+        cameraForce.x = tr.cx; cameraForce.y = tr.cy;
         cameraForce.vx = tr.vx; cameraForce.vy = tr.vy;
-        cameraForce.lastX = tr.x; cameraForce.lastY = tr.y;
+        cameraForce.lastX = tr.cx; cameraForce.lastY = tr.cy;
         cameraForce.at = performance.now() / 1000;
-        if (fastest.sp > 260) disturbAt(tr.x, tr.y);
+        if (fastest.sp > 260) disturbAt(tr.cx, tr.cy);
       }
     }
     function step(dt) {
@@ -6988,18 +7323,23 @@ fn mainFragment(
         const e = clock - st.qa.t0;
         if (e <= st.qa.seconds) {
           const x = st.qa.x + st.qa.vx * e, y = st.qa.y + st.qa.vy * e;
-          feed({ type: 'blobs', t: clock, blobs: [{ id: 1, x, y, cx: x, cy: y, vx: st.qa.vx, vy: st.qa.vy,
-                                                    z: 60, r: 0.03, age: 2 + Math.floor(e * 30) }] });
+          const w = wrap.clientWidth || 1, h = wrap.clientHeight || 1;
+          const rx = st.qa.r, ry = st.qa.r * w / h;
+          feed({ type: 'shadows', t: clock, shadows: [{ id: 1, x, y, cx: x, cy: y, vx: st.qa.vx, vy: st.qa.vy,
+                                                        z: 60, r: st.qa.r, area: 4 * rx * ry, age: 2 + Math.floor(e * 30),
+                                                        poly: [[x - rx, y - ry], [x + rx, y - ry], [x + rx, y + ry], [x - rx, y + ry]] }] });
         } else st.qa = null;
       }
       if (st.packet && st.packet !== st.consumed) { st.consumed = st.packet; ingest(st.packet); }
-      if (st.tracks.size && clock - st.packetAt > CAM_STALE) st.tracks.clear();
+      if (st.tracks.size && clock - st.packetAt > CAM_STALE) { st.tracks.clear(); uncover(new Set()); }
       draw();
     }
     function draw() {
       const w = wrap.clientWidth, h = wrap.clientHeight;
       const learning = !!(st.status && st.status.learning);
-      const show = (cfg.blobs && st.tracks.size > 0) || !!st.target || (cfg.depth && !!st.thumb) || learning;
+      const ghost = cfg.ghost || st.ghost;
+      const picture = !!(st.cal && st.cal.op !== 'none');
+      const show = !!st.cal || ((cfg.blobs || ghost) && st.tracks.size > 0) || !!st.target || (cfg.depth && !!st.thumb) || learning;
       if (!show) {
         if (st.dirty) { view.width = w; view.height = h; st.dirty = false; }
         return;
@@ -7007,13 +7347,33 @@ fn mainFragment(
       if (view.width !== w || view.height !== h) { view.width = w; view.height = h; }
       else ctx.clearRect(0, 0, w, h);
       st.dirty = true;
-      if (cfg.depth && st.thumb) {
+      if (picture) {
+        // The calibration's own pictures cover the whole raster.
+        ctx.fillStyle = st.cal.op === 'flood' ? '#fff' : '#000';
+        ctx.fillRect(0, 0, w, h);
+        if (st.cal.op === 'disc') {
+          ctx.fillStyle = '#fff';
+          ctx.beginPath(); ctx.arc(st.cal.x * w, st.cal.y * h, Math.max(6, st.cal.r * w), 0, Math.PI * 2); ctx.fill();
+        }
+      } else if (cfg.depth && st.thumb) {
         ctx.globalAlpha = 0.55; ctx.imageSmoothingEnabled = true;
         ctx.drawImage(st.thumb, 0, 0, w, h);
         ctx.globalAlpha = 1;
       }
       ctx.lineWidth = 2; ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'start';
-      if (cfg.blobs) {
+      if (ghost) {
+        // The cast outline: on the wall it should hug the real shadow.
+        ctx.strokeStyle = (picture && st.cal.op === 'flood') ? '#ff3b6b' : 'rgba(255,255,255,0.85)';
+        ctx.lineWidth = 3;
+        for (const tr of st.tracks.values()) {
+          if (!tr.spoly) continue;
+          ctx.beginPath();
+          tr.spoly.forEach((p, i) => { if (i === 0) ctx.moveTo(p[0] * w, p[1] * h); else ctx.lineTo(p[0] * w, p[1] * h); });
+          ctx.closePath(); ctx.stroke();
+        }
+        ctx.lineWidth = 2;
+      }
+      if (cfg.blobs && !picture) {
         for (const tr of st.tracks.values()) {
           const px = tr.sx * w, py = tr.sy * h;
           const rr = Math.max(8, tr.r * w);
@@ -7029,7 +7389,7 @@ fn mainFragment(
           ctx.fillText(`${tr.id} · ${Math.round(tr.z)} mm`, px + rr + 5, py + 4);
         }
       }
-      if (st.target) {
+      if (st.target && !picture) {
         const px = st.target.x * w, py = st.target.y * h;
         const col = st.target.done ? '#9fd9a3' : '#ffc36b';
         ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 3;
@@ -7044,10 +7404,13 @@ fn mainFragment(
                      px + (st.target.x > 0.5 ? -40 : 40), py - 40);
         ctx.textAlign = 'start';
       }
-      if (learning && st.status.text) {
+      // A label - never over a disc or the flood, where the camera is measuring.
+      const label = (st.cal && (st.cal.op === 'none' || st.cal.op === 'blank')) ? st.cal.text
+        : (!picture && learning && st.status.text) ? st.status.text : '';
+      if (label) {
         ctx.font = '20px system-ui, sans-serif'; ctx.textAlign = 'center';
         ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(w / 2 - 280, h / 2 - 22, 560, 44);
-        ctx.fillStyle = '#fff'; ctx.fillText(st.status.text, w / 2, h / 2 + 7);
+        ctx.fillStyle = '#fff'; ctx.fillText(label, w / 2, h / 2 + 7);
         ctx.textAlign = 'start';
       }
     }
@@ -7063,11 +7426,13 @@ fn mainFragment(
     function state() {
       return { want: st.want, linked: st.linked, url: cfg.url, fps: st.fps, hands: st.hands, text: st.text,
                packets: st.packets, inked: st.dirty, target: st.target, thumb: !!st.thumb, cfg: { ...cfg },
-               tracks: [...st.tracks.values()].map((tr) => ({ id: tr.id, x: tr.x, y: tr.y, vx: tr.vx, vy: tr.vy,
-                                                               z: tr.z, hot: tr.hot, n: tr.n })) };
+               cal: st.cal ? { ...st.cal } : null, ghost: cfg.ghost || st.ghost, shaded: st.shaded.size,
+               tracks: [...st.tracks.values()].map((tr) => ({ id: tr.id, x: tr.x, y: tr.y, cx: tr.cx, cy: tr.cy,
+                                                               vx: tr.vx, vy: tr.vy, z: tr.z, hot: tr.hot, n: tr.n,
+                                                               area: tr.area, poly: tr.poly ? tr.poly.length : 0 })) };
     }
-    // QA: a synthetic hand crossing the screen in fractions per second.
-    function qa(x, y, vx, vy, seconds) { st.qa = { x, y, vx, vy, seconds, t0: clock }; }
+    // QA: a synthetic shadow (a square of half-side r, page-width fractions) crossing the screen in fractions per second.
+    function qa(x, y, vx, vy, seconds, r) { st.qa = { x, y, vx, vy, seconds, r: r || 0.03, t0: clock }; }
     window.addEventListener('resize', hello);
     // Screen fractions <-> world, for the bridge's calibration and the probes.
     function toScreen(wx, wy) {
@@ -7439,6 +7804,7 @@ fn mainFragment(
       app.renderer.render({ container: lensScene, target: lensRT, clear: true });
     }
     drawFog(dt);
+    stepDapple(dt);
     tickStormAir();
 
     // Snow: the same sim as rain, flutter on, every landing handed to the
@@ -7491,10 +7857,15 @@ fn mainFragment(
     live.tintG = stepToward(live.tintG, targets.tintG, halfLife, dt);
     live.tintB = stepToward(live.tintB, targets.tintB, halfLife, dt);
     live.sweep = stepToward(live.sweep, targets.sweep, halfLife, dt);
+    // Dappled light is sun patches AGAINST shadow: where the cookie is
+    // open the base light lifts into the projector's headroom, by the
+    // dapple's own strength, so the canopy reads as sun through leaves
+    // rather than a dimmer wall.
+    const sun = 1 + GOBO_SUN_LIFT * gobo.live;
     baseQuad.tint =
-      (Math.round(HEADROOM * live.gain * live.tintR) << 16)
-      | (Math.round(HEADROOM * live.gain * live.tintG) << 8)
-      | Math.round(HEADROOM * live.gain * live.tintB);
+      (Math.min(255, Math.round(HEADROOM * live.gain * sun * live.tintR)) << 16)
+      | (Math.min(255, Math.round(HEADROOM * live.gain * sun * live.tintG)) << 8)
+      | Math.min(255, Math.round(HEADROOM * live.gain * sun * live.tintB));
     stepRecolor(dt);
     // The strike, and the thunder: the moment a flash crests, the whole
     // wall flinches — a gust with no hand behind it.
@@ -7513,8 +7884,10 @@ fn mainFragment(
     world.visible = !(proj.blink && proj.on)
       || Math.floor(clock * 2) % 2 === 0;
     drawSweep(live.sweep);
-    if (lightScene.children[lightScene.children.length - 1] !== strikeQuad) {
+    const lc = lightScene.children;
+    if (lc[lc.length - 1] !== goboBank || lc[lc.length - 2] !== strikeQuad) {
       lightScene.addChild(strikeQuad);
+      lightScene.addChild(goboBank);
     }
     app.renderer.render({ container: lightScene, target: lightTex, clear: true });
     if (world.children[world.children.length - 1] !== lightSprite) {
@@ -7535,18 +7908,41 @@ fn mainFragment(
   // canvas pixels (null outside the quad = a click on nothing), then
   // world.toLocal handles letterbox, trim scale and trim rotation in
   // one exact inverse.
-  function screenToWorld(cx, cy) {
+  function screenToWorld(cx, cy, clip = true) {
     if (proj.on && proj.H && proj.frame) {
       // Screen -> wall-rect px (null outside the quad = on nothing),
-      // then into canvas px where the letterbox actually sits.
-      const p = ArtLib.unproject(proj.H, [cx, cy],
-        proj.frame.L, proj.frame.L);
-      if (!p) return null;
+      // then into canvas px where the letterbox actually sits. A shadow's
+      // outline may reach past the quad and still needs a world point:
+      // unclipped, the same inverse without the eviction.
+      let p;
+      if (clip) {
+        p = ArtLib.unproject(proj.H, [cx, cy], proj.frame.L, proj.frame.L);
+        if (!p) return null;
+      } else {
+        const inv = invert3(proj.H);
+        const q = inv && applyH(inv, cx, cy);
+        if (!q) return null;
+        p = [q[0] * proj.frame.L, q[1] * proj.frame.L];
+      }
       cx = proj.frame.ox + p[0];
       cy = proj.frame.oy + p[1];
     }
     const local = world.toLocal(new PIXI.Point(cx, cy));
     return { x: local.x, y: local.y };
+  }
+  function invert3(m) {
+    const [a, b, c, d, e, f, g, h, i] = m;
+    const A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g;
+    const det = a * A + b * B + c * C;
+    if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return null;
+    return [A / det, (c * h - b * i) / det, (b * f - c * e) / det,
+            B / det, (a * i - c * g) / det, (c * d - a * f) / det,
+            C / det, (b * g - a * h) / det, (a * e - b * d) / det];
+  }
+  function applyH(m, x, y) {
+    const w = m[6] * x + m[7] * y + m[8];
+    if (!Number.isFinite(w) || Math.abs(w) < 1e-12) return null;
+    return [(m[0] * x + m[1] * y + m[2]) / w, (m[3] * x + m[4] * y + m[5]) / w];
   }
   function toWorld(event) {
     const rect = wrap.getBoundingClientRect();
@@ -8986,7 +9382,9 @@ fn mainFragment(
     });
     rcEl('dcamblobs').addEventListener('click', () => wallCam.set({ blobs: !wallCam.cfg.blobs }));
     rcEl('dcamdepth').addEventListener('click', () => wallCam.set({ depth: !wallCam.cfg.depth }));
-    for (const [id, out, field] of [['dcamcontact', 'dcamcontactout', 'contact'], ['dcamtouch', 'dcamtouchout', 'touch']]) {
+    rcEl('dcamghost').addEventListener('click', () => wallCam.set({ ghost: !wallCam.cfg.ghost }));
+    for (const [id, out, field] of [['dcamcontact', 'dcamcontactout', 'contact'], ['dcamtouch', 'dcamtouchout', 'touch'],
+                                    ['dcamregrow', 'dcamregrowout', 'regrow']]) {
       rcEl(id).value = wallCam.cfg[field]; rcEl(out).textContent = wallCam.cfg[field];
       rcEl(id).addEventListener('input', () => {
         rcEl(out).textContent = rcEl(id).value;
@@ -8998,6 +9396,7 @@ fn mainFragment(
       rcEl('dcamon').classList.toggle('on', s.want);
       rcEl('dcamblobs').classList.toggle('on', !!s.cfg.blobs);
       rcEl('dcamdepth').classList.toggle('on', !!s.cfg.depth);
+      rcEl('dcamghost').classList.toggle('on', !!s.ghost);
       rcEl('dcamnote').textContent = 'camera: ' + s.text;
     };
     wallCam.onChange(reflect);
@@ -9167,6 +9566,24 @@ fn mainFragment(
     // Persistent glass sprites bake the dial into their sizes.
     for (const d of pane.drops) paneSync(d);
   });
+  const dappleIn = document.getElementById('dapple');
+  const dappleOut = document.getElementById('dappleout');
+  dappleIn.addEventListener('input', () => {
+    dappleDial = Number(dappleIn.value);
+    dappleOut.textContent = dappleIn.value;
+  });
+  const dappleSwayIn = document.getElementById('dapplesway');
+  const dappleSwayOut = document.getElementById('dappleswayout');
+  dappleSwayIn.addEventListener('input', () => {
+    dappleSway = Number(dappleSwayIn.value);
+    dappleSwayOut.textContent = dappleSwayIn.value;
+  });
+  const frameIn = document.getElementById('dappleframe');
+  const frameOut = document.getElementById('dappleframeout');
+  frameIn.addEventListener('input', () => {
+    frameDial = Number(frameIn.value);
+    frameOut.textContent = frameIn.value;
+  });
   const mistIn = document.getElementById('mist');
   const mistOut = document.getElementById('mistout');
   mistIn.addEventListener('input', () => {
@@ -9221,6 +9638,12 @@ fn mainFragment(
     dropOut.textContent = dropIn.value;
     mistIn.value = String(mistDial);
     mistOut.textContent = mistIn.value;
+    dappleIn.value = String(dappleDial);
+    dappleOut.textContent = dappleIn.value;
+    dappleSwayIn.value = String(dappleSway);
+    dappleSwayOut.textContent = dappleSwayIn.value;
+    frameIn.value = String(frameDial);
+    frameOut.textContent = frameIn.value;
     for (const btn of seasonRow.querySelectorAll('button')) {
       btn.classList.toggle('on', btn.dataset.season === (season.target ?? season.current));
     }
@@ -9323,6 +9746,7 @@ fn mainFragment(
       trace: traceGain, vis: visitorGain, dens: densityDial,
       jit: sizeJitter, floor: sizeFloor, glow: glowDial, dust: dustDial, scat: scatterDial,
       drop: dropDial, mist: mistDial,
+      dap: dappleDial, dsw: dappleSway, frm: frameDial,
       style: styleOverride, season: season.target ?? season.current,
       day: livingDay,
       recolor: recolor.state(),
@@ -9340,6 +9764,9 @@ fn mainFragment(
     if (typeof p.glow === 'number') glowDial = p.glow;
     if (typeof p.drop === 'number') dropDial = p.drop;
     if (typeof p.mist === 'number') mistDial = p.mist;
+    if (typeof p.dap === 'number') dappleDial = p.dap;
+    if (typeof p.dsw === 'number') dappleSway = p.dsw;
+    if (typeof p.frm === 'number') frameDial = p.frm;
     if (typeof p.scat === 'number') scatterDial = p.scat;
     let rebuild = false;
     if (typeof p.dens === 'number' && p.dens !== densityDial) {
@@ -9522,9 +9949,9 @@ fn mainFragment(
     }
   }
   // '?CAM' links to the depth-camera bridge at boot. '?CAMQA' lights the
-  // whites and sends a synthetic hand across the first lit bloom of the
-  // middle tile through the socket's own entry (no bridge), so a first
-  // frame shows the explosion and the ring.
+  // whites and sends a synthetic shadow across the first lit bloom of the
+  // middle tile through the socket's own entry (no bridge), ghost on, so a
+  // first frame shows the explosion, the ring and the outline.
   if (location.search.includes('CAMQA')) {
     fit();
     recolor.rule('white', { kind: 'radial', a: '#ffcf70', b: '#ff7a18', intensity: 0.95, lift: 0.75, relief: 0.8 });
@@ -9534,7 +9961,8 @@ fn mainFragment(
     const to = inst && worldToScreen(inst.sprite.x + inst.f.lx + 260, inst.sprite.y + inst.f.ly - 14);
     if (from && to) {
       const w = wrap.clientWidth || 1, h = wrap.clientHeight || 1;
-      wallCam.qa(from[0] / w, from[1] / h, (to[0] - from[0]) / w / 2, (to[1] - from[1]) / h / 2, 2);
+      wallCam.feed({ type: 'cal', op: 'ghost', on: true });
+      wallCam.qa(from[0] / w, from[1] / h, (to[0] - from[0]) / w / 2, (to[1] - from[1]) / h / 2, 2, 0.03);
     }
   } else if (location.search.includes('CAM')) {
     wallCam.connect();
