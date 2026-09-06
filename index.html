@@ -581,6 +581,10 @@
         <input type="range" id="rcse" min="1" max="16" step="0.5" value="7">
       </div>
       <div class="slider">
+        <div class="lab"><span>Burst speed px/s</span><output id="rcsvout">600</output></div>
+        <input type="range" id="rcsv" min="150" max="2000" step="50" value="600">
+      </div>
+      <div class="slider">
         <div class="lab"><span>Cling reach px</span><output id="rcscout">10</output></div>
         <input type="range" id="rcsc" min="0" max="40" step="1" value="10">
       </div>
@@ -6909,9 +6913,9 @@ fn mainFragment(
   const SPARK_SLIDE = 45;
   const SPARK_LETGO = 0.8;
   const SPARK_CHARGE_RATE = 0.35;
-  const DEFAULT_SPLASH = { density: 1, energy: 7, reach: 24, linger: 2.5, width: 5, gain: 1.2, cling: 10, grip: 1 };
+  const DEFAULT_SPLASH = { density: 1, energy: 7, reach: 24, linger: 2.5, width: 5, gain: 1.2, cling: 10, grip: 1, speed: 600 };
   const SPLASH_RANGE = { density: [0.3, 3], energy: [1, 16], reach: [6, 80], linger: [0.5, 10],
-                         width: [1, 16], gain: [0, 4], cling: [0, 40], grip: [0.1, 4] };
+                         width: [1, 16], gain: [0, 4], cling: [0, 40], grip: [0.1, 4], speed: [150, 2000] };
   let splashDials = { ...DEFAULT_SPLASH };
   function normSplash(next) {
     const out = { ...DEFAULT_SPLASH, ...(next || {}) };
@@ -6987,6 +6991,14 @@ fn mainFragment(
     sp.live[i] = 1; sp.edgeK[i] = 1; sp.cling[i] = 0; sp.hold[i] = 0; sp.free[i] = 0;
     ledger.spawned += e;
   }
+  // Slots a burst may take without killing fresh dust: the dead ones and
+  // the ones older than a second. The ring is spawn-ordered, so those are
+  // exactly the slots the pointer reaches first.
+  function sparkBudget() {
+    let n = 0;
+    for (let i = 0; i < SPARK_MAX; i++) if (!sp.live[i] || sp.age[i] > 1) n++;
+    return n;
+  }
   function pointerVel() {
     const now = performance.now() / 1000;
     if (cameraForce.lastX === null || now - cameraForce.at > 0.25) return [0, 0];
@@ -7008,7 +7020,16 @@ fn mainFragment(
     const bx = wx - inst.sprite.x, by = wy - inst.sprite.y;
     const base = f.base.data;
     const lit = inst.sprite.alpha;
-    const K = Math.max(3, Math.round(sparkRef()));
+    // Pixels per spark: the splash density, grown until this burst fits
+    // the ring's free or old slots - a second bloom in the same motion
+    // used to overwrite the first one's fresh dust (Kevin: "one gets
+    // killed early"). Fewer, heavier sparks carry the same light.
+    let npx = 0;
+    for (let j = 0; j < f.w * f.h; j++) {
+      if (base[j * 4 + 3] >= 128 && 1 - er.mask[j] > 0.01) npx++;
+    }
+    const K = Math.max(Math.max(3, Math.round(sparkRef())),
+                       Math.ceil(npx / Math.max(48, sparkBudget())));
     const R = Math.hypot(f.w, f.h);
     let acc = 0, accN = 0, ax = 0, ay = 0, total = 0;
     const emit = (x, y, e) => {
@@ -7020,10 +7041,13 @@ fn mainFragment(
       // the pixel's own direction from it.
       const speed = SPARK_BURST * (0.45 + 0.55 * h1) * (1 - 0.5 * Math.min(1, d / R));
       const ang = Math.atan2(dy, dx) + (h2 - 0.5) * 0.7;
-      spawnSpark(inst.sprite.x + x, inst.sprite.y + y,
-                 SPARK_CARRY * vx + Math.cos(ang) * speed,
-                 SPARK_CARRY * vy + Math.sin(ang) * speed,
-                 e, lookColorAt(inst, look, x, y));
+      // Capped at Burst speed: a fast hand or a shadow's velocity would
+      // otherwise fire the dust across the wall (Kevin).
+      let sx = SPARK_CARRY * vx + Math.cos(ang) * speed;
+      let sy = SPARK_CARRY * vy + Math.sin(ang) * speed;
+      const mag = Math.hypot(sx, sy), cap = splashDials.speed;
+      if (mag > cap) { sx *= cap / mag; sy *= cap / mag; }
+      spawnSpark(inst.sprite.x + x, inst.sprite.y + y, sx, sy, e, lookColorAt(inst, look, x, y));
     };
     for (let y = 0; y < f.h; y++) {
       for (let x = 0; x < f.w; x++) {
@@ -7256,15 +7280,16 @@ fn mainFragment(
     refillOf: (inst) => (inst && inst.erode && inst.erode.any) ? erodeK(inst.erode) : 0,
     // QA: where the live sparks are, and how close to the raster's edge.
     extent: () => {
-      let n = 0, minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minK = 1;
+      let n = 0, minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minK = 1, maxV = 0;
       for (let i = 0; i < SPARK_MAX; i++) {
         if (!sp.live[i]) continue;
         n++;
+        maxV = Math.max(maxV, Math.hypot(sp.vx[i], sp.vy[i]));
         minX = Math.min(minX, sp.x[i]); maxX = Math.max(maxX, sp.x[i]);
         minY = Math.min(minY, sp.y[i]); maxY = Math.max(maxY, sp.y[i]);
         minK = Math.min(minK, sp.edgeK[i]);
       }
-      return { n, minX, maxX, minY, maxY, minK };
+      return { n, minX, maxX, minY, maxY, minK, maxV };
     },
     get glow() { return edgeGlow.mesh; },
     // QA: stand in for a moving pointer.
@@ -9712,7 +9737,7 @@ fn mainFragment(
       recolor.outline({ [field]: Number(rcEl(id).value) });
     });
   }
-  const SPLASH_DIALS = [['rcsd', 'rcsdout', 'density'], ['rcse', 'rcseout', 'energy'],
+  const SPLASH_DIALS = [['rcsd', 'rcsdout', 'density'], ['rcse', 'rcseout', 'energy'], ['rcsv', 'rcsvout', 'speed'],
                         ['rcsc', 'rcscout', 'cling'], ['rcsf', 'rcsfout', 'grip'],
                         ['rcsr', 'rcsrout', 'reach'], ['rcsl', 'rcslout', 'linger'],
                         ['rcsw', 'rcswout', 'width'], ['rcsg', 'rcsgout', 'gain']];
