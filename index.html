@@ -6987,7 +6987,8 @@ fn mainFragment(
     sparkSalt = (sparkSalt + 0x9e37) >>> 0;
     sp.x[i] = wx; sp.y[i] = wy; sp.vx[i] = vx; sp.vy[i] = vy;
     sp.e[i] = e; sp.e0[i] = e; sp.age[i] = 0; sp.tint[i] = tint; sp.salt[i] = sparkSalt;
-    sp.r0[i] = 2.4 + 2.4 * Math.sqrt(e / sparkRef());
+    // Heavier sparks are bigger, to a point: past 8 px they get brighter instead.
+    sp.r0[i] = Math.min(8, 2.4 + 2.4 * Math.sqrt(e / sparkRef()));
     sp.live[i] = 1; sp.edgeK[i] = 1; sp.cling[i] = 0; sp.hold[i] = 0; sp.free[i] = 0;
     ledger.spawned += e;
   }
@@ -7220,6 +7221,12 @@ fn mainFragment(
     chargeUpload();
   }
   let clingingNow = 0;
+  // The cloud diffuses a little, then holds: 1.5x by ten seconds, never
+  // more (a linear 12 %/s made old dust huge once the ring stopped
+  // recycling it early).
+  function sparkRadius(i) {
+    return sp.r0[i] * (1 + 0.5 * (1 - Math.exp(-sp.age[i] / 3)));
+  }
   function drawSparks() {
     edgeGlow.sync(splashDials.width, splashDials.gain);
     for (let i = 0; i < sparkUsed; i++) sparkPool(i).visible = false;
@@ -7229,7 +7236,7 @@ fn mainFragment(
     const ref = sparkRef();
     for (let i = 0; i < SPARK_MAX; i++) {
       if (!sp.live[i]) continue;
-      const r = sp.r0[i] * (1 + 0.12 * sp.age[i]);
+      const r = sparkRadius(i);
       // Energy over footprint, with a fast flicker: pixie dust.
       const base = (sp.e[i] / ref) * (sp.r0[i] * sp.r0[i]) / (r * r);
       const flick = hashed(SPARK_SEED, sp.salt[i], 8 + Math.floor(sp.age[i] * 16));
@@ -7280,16 +7287,18 @@ fn mainFragment(
     refillOf: (inst) => (inst && inst.erode && inst.erode.any) ? erodeK(inst.erode) : 0,
     // QA: where the live sparks are, and how close to the raster's edge.
     extent: () => {
-      let n = 0, minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minK = 1, maxV = 0;
+      let n = 0, minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minK = 1, maxV = 0, maxR = 0, maxAge = 0;
       for (let i = 0; i < SPARK_MAX; i++) {
         if (!sp.live[i]) continue;
         n++;
         maxV = Math.max(maxV, Math.hypot(sp.vx[i], sp.vy[i]));
+        maxR = Math.max(maxR, sparkRadius(i));
+        maxAge = Math.max(maxAge, sp.age[i]);
         minX = Math.min(minX, sp.x[i]); maxX = Math.max(maxX, sp.x[i]);
         minY = Math.min(minY, sp.y[i]); maxY = Math.max(maxY, sp.y[i]);
         minK = Math.min(minK, sp.edgeK[i]);
       }
-      return { n, minX, maxX, minY, maxY, minK, maxV };
+      return { n, minX, maxX, minY, maxY, minK, maxV, maxR, maxAge };
     },
     get glow() { return edgeGlow.mesh; },
     // QA: stand in for a moving pointer.
