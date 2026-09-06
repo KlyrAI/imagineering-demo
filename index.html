@@ -80,11 +80,16 @@
     background: var(--panel);
     padding: 0.85rem 0.9rem 1.2rem;
     overflow-y: auto;
+    overflow-x: hidden;
     display: grid;
     gap: 1.05rem;
     align-content: start;
   }
-  .group { display: grid; gap: 0.5rem; }
+  .group { display: grid; gap: 0.5rem; min-width: 0; }
+  /* Grid and flex children default to min-width:auto, which lets one
+     wide row stretch every group past the column. */
+  aside .slider, aside .rcrow, aside .btnrow, aside .hsl, aside details { min-width: 0; }
+  aside select, aside input[type=number], aside input[type=text] { max-width: 100%; box-sizing: border-box; }
   .group > .head {
     font-family: var(--mono);
     font-size: 0.68rem;
@@ -211,9 +216,9 @@
   body.calibrating #calpanel { display: block; }
   #calpanel .row2 { display: flex; gap: 6px; align-items: center; margin: 5px 0; }
   #calpanel .row2 span:first-child { width: 44px; color: var(--ink-dim); }
-  .group .venue { display: flex; gap: 6px; align-items: center; margin: 5px 0; }
-  .group .venue span { width: 52px; color: var(--ink-dim); }
-  .group .venue input, .group .venue select { width: 72px; }
+  .group .venue { display: flex; gap: 6px; align-items: center; margin: 2px 0; min-width: 0; }
+  .group .venue span { flex: 0 0 58px; color: var(--ink-dim); font-size: 0.8rem; }
+  .group .venue input, .group .venue select { flex: 1 1 0; width: 0; min-width: 0; }
   #calpanel button {
     background: #1c231e; border: 1px solid var(--edge); color: var(--ink);
     border-radius: 4px; font-size: 11.5px; padding: 3px 7px; cursor: pointer;
@@ -268,7 +273,7 @@
      sit where the projector raster puts them. */
   #dcamview { position: absolute; inset: 0; width: 100%; height: 100%;
     pointer-events: none; z-index: 50; }
-  .rcrow input[type=text] { flex: 1 1 auto; min-width: 0; background: #10150f;
+  .rcrow input[type=text] { flex: 1 1 0; width: 0; min-width: 0; background: #10150f;
     color: var(--ink); border: 1px solid var(--edge); border-radius: 3px;
     font-size: 11.5px; padding: 3px 5px; }
   /* The two doors out of projection. Both ride the wall, so both fade
@@ -362,11 +367,7 @@
     <div class="group">
       <div class="head">Scene</div>
       <div class="btnrow" id="scenerow"></div>
-      <p class="note">One strip, every lane: season re-ink, projector gain
-      and tint, sweep, wind, rain, trace glow, and the visitors —
-      motes and fireflies, plus monarchs, meadow butterflies and moths, each one hashed whole from its seed. <b>Live the day</b>
-      walks the strip by itself. Sliders below still override anything,
-      until the next scene.</p>
+      <p class="note">One strip, every lane; <b>Live the day</b> walks it by itself; the sliders override until the next scene.</p>
     </div>
     <div class="group">
       <div class="head">Weather</div>
@@ -434,7 +435,7 @@
         <div class="lab"><span>Frame</span><output id="dappleframeout">1</output></div>
         <input type="range" id="dappleframe" min="0" max="1.5" step="0.05" value="1">
       </div>
-      <p class="note" style="margin:0"><b>Dapple</b> &mdash; a canopy cookie in front of the projector: branch and leaf shadows over everything, swaying on the wind; <b>Dapple gust</b> is how much a stroke, thunder or the Gust button leans it (0: the canopy ignores disturbances); <b>Frame</b> dirties the raster&rsquo;s edge</p>
+      <p class="note" style="margin:0"><b>Dapple</b> &mdash; a canopy cookie in front of the projector; <b>Dapple gust</b> how far disturbances lean it; <b>Frame</b> dirties the world&rsquo;s edge</p>
       <div class="btnrow" id="stylerow">
         <button data-style="scene" class="on">Scene</button>
         <button data-style="print">Print</button>
@@ -450,27 +451,24 @@
       </div>
       <button id="projpop">Pop out controls</button>
       <button id="projlight">Light only</button>
-      <div class="venue"><span>repeats</span><input type="number" id="venuerepeats" min="1" max="6" step="1">
-        <span>fit</span><select id="venuefit"><option value="contain">contain</option><option value="cover">cover</option></select></div>
+      <div class="venue"><span>repeats</span><input type="number" id="venuerepeats" min="1" max="6" step="1"></div>
+      <div class="venue"><span>fit</span><select id="venuefit"><option value="contain">contain</option><option value="cover">cover</option></select></div>
       <div class="venue"><span>render</span><input type="number" id="venuerender" min="0.5" max="2" step="0.25"></div>
       <span class="camstatus" id="venuenote"></span>
-      <p class="note"><b>Light only</b> is what the projector should emit
-      onto the real printed wall: the print supplies the pigment, the
-      beam carries only the living light &mdash; critters, rain, glow,
-      sweep. <b>Project</b> goes fullscreen and applies the saved
-      corner warp; <b>Esc</b> leaves it again (from fullscreen that reads
-      as two presses &mdash; the first one is the browser's), or click the
-      Exit chip that fades in whenever you move the mouse.
-      <b>Calibrate</b> shows draggable corners, the tile grid,
-      and the camera tools &mdash; drag the projected corners onto the wall,
-      then slide the print until the grid sits on the printed seams.
-      <b>Pop out</b> opens the operator console for a second screen: camera,
-      dials and snap live there while the wall shows only the art.
-      <b>Repeats</b>, <b>Fit</b> and <b>Render</b> make the raster follow the
-      wall: how many printed repeats the world holds (saves, then reloads),
-      whether the world is letterboxed (contain) or fills the frame (cover),
-      and the render density against the display's own pixels (README,
-      Resolution).</p>
+      <p class="note" style="margin:0"><b>Raster edge</b> &mdash; nothing blooms within the margin of the frame&rsquo;s edge; light fades over the band; sparks slow in it</p>
+      <div class="slider">
+        <div class="lab"><span>Edge margin px</span><output id="edgemarginout">48</output></div>
+        <input type="range" id="edgemargin" min="0" max="240" step="4" value="48">
+      </div>
+      <div class="slider">
+        <div class="lab"><span>Edge fade px</span><output id="edgefadeout">96</output></div>
+        <input type="range" id="edgefade" min="0" max="320" step="8" value="96">
+      </div>
+      <div class="slider">
+        <div class="lab"><span>Edge drag</span><output id="edgedragout">0.60</output></div>
+        <input type="range" id="edgedrag" min="0" max="1" step="0.05" value="0.6">
+      </div>
+      <p class="note"><b>Light only</b> for the wall; <b>Project</b> is fullscreen with the saved warp (Esc leaves); <b>Calibrate</b> drags the corners; <b>Repeats</b>, <b>Fit</b>, <b>Render</b> make the raster follow the wall (README, Resolution).</p>
     </div>
     <div class="group">
       <div class="head">Presets</div>
@@ -490,9 +488,7 @@
         <button data-season="golden">Golden</button>
         <button data-season="winter">Winter</button>
       </div>
-      <p class="note">The same print, re-inked: hue families rotate while
-      lightness holds exactly, so every edge and shadow is the print&rsquo;s
-      own. Paper and whites sit below the chroma floor and cannot move.</p>
+      <p class="note">The same print re-inked: hues rotate, lightness holds.</p>
     </div>
     <div class="group">
       <div class="head">Landing light</div>
@@ -575,7 +571,7 @@
         <div class="lab"><span>Release s</span><output id="rclrelout">2</output></div>
         <input type="range" id="rclrel" min="0.5" max="5" step="0.25" value="2">
       </div>
-      <p class="note" style="margin:0"><b>Touch</b> &mdash; press and move: a lit bloom you touch explodes into sparkles; the dust clings to the wall&rsquo;s edges and lights them</p>
+      <p class="note" style="margin:0"><b>Touch</b> &mdash; a lit bloom you sweep explodes into dust that clings to the print&rsquo;s contours</p>
       <div class="slider">
         <div class="lab"><span>Splash density</span><output id="rcsdout">1</output></div>
         <input type="range" id="rcsd" min="0.3" max="3" step="0.1" value="1">
@@ -608,7 +604,7 @@
         <div class="lab"><span>Edge gain</span><output id="rcsgout">1.2</output></div>
         <input type="range" id="rcsg" min="0" max="4" step="0.1" value="1.2">
       </div>
-      <p class="note" style="margin:0"><b>Camera</b> &mdash; the depth camera&rsquo;s shadows disrupt the blooms and critters (<code>tools/depthcam.py</code>)</p>
+      <p class="note" style="margin:0"><b>Camera</b> &mdash; the depth camera&rsquo;s shadows disrupt blooms and critters (<code>tools/depthcam.py</code>)</p>
       <div class="rcrow">
         <input type="text" id="dcamurl" value="ws://127.0.0.1:8765" spellcheck="false">
         <button id="dcamon">Camera</button>
@@ -657,30 +653,7 @@
         <div class="lab"><span>Outline gain</span><output id="rcogout">1.4</output></div>
         <input type="range" id="rcog" min="0.2" max="4" step="0.1" value="1.4">
       </div>
-      <p class="note">A landing is bioluminescence: a butterfly settling on a
-      bloom lights it <b>amber</b>, a moth <b>moonlit blue</b> &mdash; the
-      glow each species already wears &mdash; eased in, held, eased out.
-      A <b>white</b> bloom takes the fill colours over its whole matte,
-      carrying its own <b>relief</b> (the print&rsquo;s broad light and
-      shadow); a <b>pink</b> bloom&rsquo;s pigment swallows a fill, so it
-      takes the <b>outline</b> colours instead: its silhouette and
-      strongest petal contours as a glowing line, built from the outline
-      dials. Butterflies and moths each carry their own three colour
-      pairs here, all in view: the fill, the outline, and the halo the
-      critter wears in flight (which the dust borrows). Colours are HSL:
-      lightness is the projector operator&rsquo;s slider. Two critters on one bloom cross-fade; a held
-      landing lets go when the last one leaves. <b>Touch</b>: anything
-      moving across the wall is a contact &mdash; the pointer today, the
-      depth camera&rsquo;s hands later. Press and move: the moment it
-      touches a lit bloom, that bloom explodes &mdash; all of its light at
-      once as pixie-dust sparkles, each carrying exactly the light of the
-      petals it left (which go dark and stay dark until the bloom is lit
-      again), thrown out from the point of contact and along your
-      motion&rsquo;s vector. The burst slows into a cloud that is dust: it
-      drifts on the wall&rsquo;s wind, settles slowly, coils, and
-      twinkles for as long as <b>Sparkle life</b> says; <b>Splash
-      density</b> sets how many sparkles share the light. Everything
-      here rides in presets and share links.</p>
+      <p class="note">A landing lights its bloom: butterflies amber, moths moonlit blue; white blooms take the fill, pink ones the outline. Presets and share links carry all of it.</p>
       <details>
         <summary class="note">Steady rules (a look held on blooms with no critter)</summary>
         <div class="btnrow" id="rctargets">
@@ -752,71 +725,6 @@
         </div>
         <p class="note" id="rcnote">No rules yet.</p>
       </details>
-    </div>
-    <div class="group">
-      <div class="head">How it moves</div>
-      <p class="note">
-        <b>The print holds still.</b> Field-tested: the flowers do not need
-        to move &mdash; they are printed on the wall. The critters, the
-        rain, the glow and the sweep are the experience, and every one of
-        them still knows exactly where the flowers are: the faces steer
-        the visitors, and the depth weave slips particles behind the
-        printed blooms through the paper mask.
-      </p>
-      <p class="note">
-        <b>Every flower has a face.</b> The printed heads are not
-        orthogonal &mdash; each tips toward its own direction and is
-        foreshortened by its tilt &mdash; so every one carries a face:
-        center, radius, facing and tilt, kind and color. A critter lands
-        on a site laid in that flower&rsquo;s own plane &mdash; on the
-        rays, the pad or the near lip, never the pistil &mdash; lies
-        along it, head to the center, and its wings fold up toward the
-        flower&rsquo;s normal: closed wings vanish to a line on a face-on
-        bloom and stand up in full profile on a cup seen from the side.
-        Butterflies take the pinks and the whites alike and pump their
-        wings half-open as they feed; moths settle flat and keep to the
-        pale night flowers. Buds have nowhere to land. <b>#FLOWERS</b>
-        opens the editor to tune the faces on the wall.
-      </p>
-      <p class="note">
-        <b>Nobody flies parallel to the wall.</b> In the air the body has
-        three axes too: it banks into every turn, flutters about its own
-        axis with each stroke, bobs its nose with the beat and drifts its
-        pitch so the wing plane is never long parallel to the eye &mdash;
-        a real butterfly&rsquo;s flight is roll-heavy; a moth flies
-        steadier; a glider sails flat. The same fold, seen from where you
-        stand. And it has <b>depth</b>: in the open a critter weaves
-        between behind the print &mdash; smaller, dimmer, eclipsed by the
-        printed blooms &mdash; and well in front of it, larger; it comes
-        back to the print&rsquo;s own plane for every landing.
-      </p>
-      <p class="note">
-        <b>Rain knows the print.</b> The wall&rsquo;s silhouette ships as a
-        signed distance field, so a drop lands on the drawn edge of the
-        print, runs down that surface, beads, merges, and drips from the
-        rim &mdash; the water moves; the flowers never do.
-      </p>
-      <p class="note">
-        <b>Water bends light, and gravity bends water.</b> Every settled
-        bead paints a lens into a displacement map, and one filter over
-        the composed wall refracts the actual print through it &mdash;
-        the pigment genuinely warps under each drop, scaled by the
-        <b>Drop size</b> dial. No drop is a circle: mass sags each bead
-        into an egg (tension holds the small ones rounder), a drop
-        hanging at a leaf&rsquo;s rim necks into a pendant before it lets
-        go, and sliding drops jiggle and tow a wet wake. The bead itself
-        is drawn in projector terms: light added for the specular and
-        the gathered crescent, light withheld for the rim and body
-        shadow &mdash; and its lens wears the same sagged silhouette.
-      </p>
-      <p class="note">
-        <b>Drops live together, windshield rules.</b> A field of static
-        condensation textures the wall; heavy sliders carry the motion
-        &mdash; each one absorbs every droplet in its swept path,
-        growing as it goes, shedding a dotted trail of micro-drops that
-        costs it mass, so it starves, stalls, gathers and lurches again.
-        Rain impacts feed the field; a dry spell evaporates it.
-      </p>
     </div>
   </aside>
 </div>
@@ -3290,10 +3198,24 @@ fn mainFragment(
         ? Math.max(lo, Math.min(hi, v)) : fallback;
     };
     const fit = q.get('FIT') || saved.fit;
+    // The raster's edge: ?EDGE=margin,fade,drag, else the saved venue.
+    const edgeUrl = (q.get('EDGE') || '').split(',').map(Number);
+    const edgeSaved = saved.edge && typeof saved.edge === 'object' ? saved.edge : {};
+    const edgeNum = (i, key, fallback, lo, hi) => {
+      let v = NaN;
+      if (q.has('EDGE') && Number.isFinite(edgeUrl[i])) v = edgeUrl[i];
+      else if (edgeSaved[key] !== undefined && edgeSaved[key] !== null) v = Number(edgeSaved[key]);
+      return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fallback;
+    };
     return {
       repeats: Math.round(num('REPEATS', 3, 1, 6)),
       render: num('RENDER', 1, 0.5, 2),
       fit: fit === 'cover' ? 'cover' : 'contain',
+      edge: {
+        margin: edgeNum(0, 'margin', 48, 0, 240),
+        fade: edgeNum(1, 'fade', 96, 0, 320),
+        drag: edgeNum(2, 'drag', 0.6, 0, 1),
+      },
     };
   })();
   const GRID = VENUE.repeats;
@@ -3318,6 +3240,7 @@ fn mainFragment(
     frame: null,                       // wall letterbox inside the canvas
     active: 0, grid: false, flood: false, blink: false, light: false,
     repeats: VENUE.repeats, fit: VENUE.fit, render: VENUE.render,
+    edge: VENUE.edge,                  // { margin, fade, drag } world px / 0-1
   };
   let calRef = null;                   // trim-INdependent overlay
   let calGrid = null;                  // trim-following tile grid
@@ -3341,6 +3264,11 @@ fn mainFragment(
 
   const world = new PIXI.Container();
   app.stage.addChild(world);
+  // The raster's edge fade: black bands along the visible rect, above
+  // the world (light AND critters), below the calibration overlays,
+  // outside the lens filter; transformed like the world in fit().
+  const edgeFrame = new PIXI.Container();
+  app.stage.addChild(edgeFrame);
   // The letterbox, now composed with the content TRIM: the corner warp
   // (CSS, outside GL) fixes the projector-to-wall geometry, and the
   // trim slides/scales/rotates the print INSIDE that locked quad until
@@ -3358,6 +3286,11 @@ fn mainFragment(
   }
   let lightRes = 0;                    // the light field's texels per side
   let sizeLightField = () => {};       // bound once the light field exists
+  // The raster's edge (the module sits after the sparkfield; the state
+  // lives here so fit() may run before it): the visible rect in world
+  // units, a stamp the site-closing keys on, the locked-bloom count.
+  const edge = { vis: { x0: 0, y0: 0, x1: WALL, y1: WALL }, stamp: 0, locked: 0 };
+  let edgeReady = false;
   function fit() {
     const s0 = fitScale();
     const s = s0 * proj.trim.scale;
@@ -3380,7 +3313,12 @@ fn mainFragment(
       calRef.scale.set(s0);
       calRef.position.set(app.screen.width / 2, app.screen.height / 2);
     }
+    edgeFrame.pivot.set(WALL / 2, WALL / 2);
+    edgeFrame.rotation = proj.trim.rot;
+    edgeFrame.scale.set(s);
+    edgeFrame.position.copyFrom(world.position);
     sizeLightField(s0);
+    syncEdge();
     syncVenuePanel();
   }
   app.renderer.on('resize', fit);
@@ -5764,6 +5702,14 @@ fn mainFragment(
     ];
     for (const inst of rcInstances) {
       const f = inst.f;
+      if (inst.edgeLocked) {
+        // The raster's edge rule: a motif at the frame never blooms -
+        // no steady look, no landing, no pulse, nothing to burst.
+        inst.tr = null; inst.erode = null; inst.fade = 0; inst.texKey = '';
+        inst.sprite.visible = false;
+        if (inst.prevSprite) inst.prevSprite.visible = false;
+        continue;
+      }
       let look = null, env = 1;
       if (inst.erode && inst.erode.refill && erodeK(inst.erode) <= 0) inst.erode = null;
       if (inst.tr) {
@@ -5877,12 +5823,41 @@ fn mainFragment(
   // its target SITE (a point on the flower's own petals, per species);
   // the recolor label map under that site names the bloom; the reaction
   // paints it. Detected here, on the state edge - the sim emits nothing.
+  // A site on a locked bloom, or inside the margin itself, is CLOSED:
+  // the claims table holds -2 there (free is -1, taken is a member id),
+  // so the engine never picks it and never releases it. Recomputed when
+  // the edge moves (edge.stamp); a percher already there finishes its
+  // visit, then the slot closes behind it.
+  function closeEdgeSites(sIdx, entry) {
+    const sim = entry.sim;
+    if (entry.edgeStamp !== edge.stamp) {
+      entry.edgeStamp = edge.stamp;
+      const sites = perchSites[entry.key] || [];
+      const ox = (sIdx % GRID) * TILE, oy = Math.floor(sIdx / GRID) * TILE;
+      const byId = rcByTile[sIdx];
+      const closed = new Uint8Array(sim.claims.length);
+      for (let i = 0; i < closed.length && i < sites.length; i++) {
+        const hit = siteBloom(entry.key, i);
+        const inst = hit && byId ? byId.get(hit.f.id) : null;
+        closed[i] = ((inst && inst.edgeLocked)
+          || distToEdge(ox + sites[i].x, oy + sites[i].y) < proj.edge.margin) ? 1 : 0;
+        if (!closed[i] && sim.claims[i] === -2) sim.claims[i] = -1;
+      }
+      entry.edgeClosed = closed;
+    }
+    const closed = entry.edgeClosed;
+    if (!closed) return;
+    for (let i = 0; i < closed.length; i++) {
+      if (closed[i] && sim.claims[i] === -1) sim.claims[i] = -2;
+    }
+  }
   function pollPerches() {
     for (let sIdx = 0; sIdx < steerSims.length; sIdx++) {
       const entries = steerSims[sIdx];
       if (!entries) continue;
       for (const entry of entries) {
         const sim = entry.sim;
+        closeEdgeSites(sIdx, entry);
         if (!entry.prevState || entry.prevState.length !== sim.members.length) {
           entry.prevState = sim.members.map((m) => m.state);
           entry.perchAt = sim.members.map(() => -1);
@@ -5988,7 +5963,12 @@ fn mainFragment(
                                         pending: season.pending, baked: Object.keys(tileSeason),
                                         baking: bake ? bake.row / bake.canvas.height : null }),
                        setSeason, applyScene, setRender: (v) => setRender(v),
-                       setFit: (m) => setFit(m) };
+                       setFit: (m) => setFit(m),
+                       // QA: the raster's edge - the visible rect, the dials, the locks.
+                       edge: () => ({ vis: { ...edge.vis }, margin: proj.edge.margin,
+                                      fade: proj.edge.fade, drag: proj.edge.drag,
+                                      locked: edge.locked, stamp: edge.stamp }),
+                       setEdge: (p) => setEdge(p) };
   const sweepRad = DEFAULT_SWEEP.angleDeg * Math.PI / 180;
   const sweepAx = Math.cos(sweepRad), sweepAy = Math.sin(sweepRad);
   function drawSweep(strength) {
@@ -6973,6 +6953,7 @@ fn mainFragment(
     tint: new Uint32Array(SPARK_MAX), salt: new Uint32Array(SPARK_MAX),
     live: new Uint8Array(SPARK_MAX), cling: new Uint8Array(SPARK_MAX),
     hold: new Float32Array(SPARK_MAX), free: new Float32Array(SPARK_MAX),
+    edgeK: new Float32Array(SPARK_MAX),   // 1 in the open, 0 at the raster's edge
   };
   let sparkNext = 0, sparkSalt = 0;
   const sparkPool = makePool(sparkAdd, lanternTex, 0.5);
@@ -7003,7 +6984,7 @@ fn mainFragment(
     sp.x[i] = wx; sp.y[i] = wy; sp.vx[i] = vx; sp.vy[i] = vy;
     sp.e[i] = e; sp.e0[i] = e; sp.age[i] = 0; sp.tint[i] = tint; sp.salt[i] = sparkSalt;
     sp.r0[i] = 2.4 + 2.4 * Math.sqrt(e / sparkRef());
-    sp.live[i] = 1; sp.cling[i] = 0; sp.hold[i] = 0; sp.free[i] = 0;
+    sp.live[i] = 1; sp.edgeK[i] = 1; sp.cling[i] = 0; sp.hold[i] = 0; sp.free[i] = 0;
     ledger.spawned += e;
   }
   function pointerVel() {
@@ -7105,6 +7086,7 @@ fn mainFragment(
     touch = null;
     return did;
   }
+  const SPARK_EDGE_V = 600;   // px/s a spark may still carry toward the raster's edge at the band's rim, at drag 1
   function stepSparks(dt) {
     if (touch) {
       const [pvx, pvy] = pointerVel();
@@ -7182,12 +7164,33 @@ fn mainFragment(
         sp.vx[i] += Math.cos(ang) * SPARK_SWIRL * dt;
         sp.vy[i] += Math.sin(ang) * SPARK_SWIRL * dt;
       }
+      // The raster's edge: inside the fade band a mote slows toward the
+      // edge (Edge drag) and dims (Edge fade); past the band it is gone.
+      const de = distToEdge(sp.x[i], sp.y[i]);
+      const fadeW = proj.edge.fade;
+      const k = fadeW > 0 ? Math.max(0, Math.min(1, de / fadeW)) : (de < 0 ? 0 : 1);
+      sp.edgeK[i] = k;
+      if (de < -Math.max(24, fadeW)) { sp.live[i] = 0; continue; }
+      if (k < 1 && proj.edge.drag > 0) {
+        // A soft wall: the OUTWARD speed is capped by the square of the
+        // way in (at the rim it is still, so nothing crosses however
+        // hard the burst threw it); the rest wears down on the drag.
+        const v = edge.vis;
+        const dl = sp.x[i] - v.x0, dr = v.x1 - sp.x[i], du = sp.y[i] - v.y0;
+        let nx = 0, ny = 0;
+        if (de === dl) nx = -1; else if (de === dr) nx = 1; else if (de === du) ny = -1; else ny = 1;
+        const outward = sp.vx[i] * nx + sp.vy[i] * ny;
+        const cap = SPARK_EDGE_V * k * k / proj.edge.drag;
+        if (outward > cap) { sp.vx[i] -= (outward - cap) * nx; sp.vy[i] -= (outward - cap) * ny; }
+        const damp = Math.exp(-dt * 8 * proj.edge.drag * (1 - k));
+        sp.vx[i] *= damp; sp.vy[i] *= damp;
+      }
       sp.x[i] += sp.vx[i] * dt;
       sp.y[i] += sp.vy[i] * dt;
       // Its light charges the wall around it; a clinging mote, on the
-      // line, charges it harder.
+      // line, charges it harder; at the raster's edge, less.
       chargeDeposit(sp.x[i], sp.y[i], sp.tint[i],
-                    (sp.e[i] / ref) * dt * SPARK_CHARGE_RATE * (on ? 2 : 1), splashDials.reach);
+                    (sp.e[i] / ref) * dt * SPARK_CHARGE_RATE * (on ? 2 : 1) * k, splashDials.reach);
     }
     clingingNow = held;
     chargeUpload();
@@ -7207,7 +7210,8 @@ fn mainFragment(
       const base = (sp.e[i] / ref) * (sp.r0[i] * sp.r0[i]) / (r * r);
       const flick = hashed(SPARK_SEED, sp.salt[i], 8 + Math.floor(sp.age[i] * 16));
       const tw = 0.25 + 0.75 * flick * flick;
-      const soft = Math.min(1, base * (0.55 + 0.45 * tw));
+      const kk = sp.edgeK[i] * sp.edgeK[i];    // the raster's edge fade
+      const soft = Math.min(1, base * (0.55 + 0.45 * tw)) * kk;
       if (soft < 0.01) continue;
       const s0 = sparkPool(sparkUsed++);
       s0.position.set(sp.x[i], sp.y[i]);
@@ -7219,7 +7223,7 @@ fn mainFragment(
       g.width = g.height = r * 5.5 * (0.6 + 0.4 * tw);
       g.rotation = hashed(SPARK_SEED, sp.salt[i], 9) * Math.PI * 0.5;
       g.tint = sp.tint[i];
-      g.alpha = Math.min(1, base * 1.3 * tw * tw);
+      g.alpha = Math.min(1, base * 1.3 * tw * tw) * kk;
     }
     for (let k = flashes.length - 1; k >= 0; k--) {
       const fl = flashes[k];
@@ -7230,7 +7234,7 @@ fn mainFragment(
       f0.position.set(fl.x, fl.y);
       f0.width = f0.height = fl.r * 2 * (0.5 + 1.4 * u);
       f0.tint = fl.tint;
-      f0.alpha = 0.8 * (1 - u) * (1 - u) * Math.min(1, fl.e / (ref * 60));
+      f0.alpha = 0.8 * (1 - u) * (1 - u) * Math.min(1, fl.e / (ref * 60)) * edgeFadeAt(fl.x, fl.y);
     }
   }
   const sparkfield = {
@@ -7250,11 +7254,118 @@ fn mainFragment(
     },
     edgeAt: (wx, wy) => ({ ...edgeAt(wx, wy) }),
     refillOf: (inst) => (inst && inst.erode && inst.erode.any) ? erodeK(inst.erode) : 0,
+    // QA: where the live sparks are, and how close to the raster's edge.
+    extent: () => {
+      let n = 0, minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minK = 1;
+      for (let i = 0; i < SPARK_MAX; i++) {
+        if (!sp.live[i]) continue;
+        n++;
+        minX = Math.min(minX, sp.x[i]); maxX = Math.max(maxX, sp.x[i]);
+        minY = Math.min(minY, sp.y[i]); maxY = Math.max(maxY, sp.y[i]);
+        minK = Math.min(minK, sp.edgeK[i]);
+      }
+      return { n, minX, maxX, minY, maxY, minK };
+    },
     get glow() { return edgeGlow.mesh; },
     // QA: stand in for a moving pointer.
     primeVel: (vx, vy) => { cameraForce.vx = vx; cameraForce.vy = vy; cameraForce.lastX = 0; cameraForce.lastY = 0; cameraForce.at = performance.now() / 1000 + 5; },
   };
   window.sparkfield = sparkfield;
+
+  // ---- the raster's edge -------------------------------------------------
+  // The projector's frame cuts the print (Repeats 2, cover: 2 x 1.125
+  // repeats show). Kevin's rule: no motif blooms if it touches the edge
+  // or comes within a margin of it; dust and burst particles never reach
+  // it - they slow in a band along it and fade out; every light fades to
+  // black there. The edge is the canvas edge (the CSS warp only moves
+  // where the canvas lands on the wall), clipped to the wall's rect.
+  function distToEdge(x, y) {
+    const v = edge.vis;
+    return Math.min(x - v.x0, v.x1 - x, y - v.y0, v.y1 - y);
+  }
+  function edgeFadeAt(x, y) {
+    const w = proj.edge.fade, d = distToEdge(x, y);
+    const k = w > 0 ? Math.max(0, Math.min(1, d / w)) : (d < 0 ? 0 : 1);
+    return k * k;
+  }
+  const edgeTex = (() => {
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 1;
+    const ctx = c.getContext('2d');
+    const g = ctx.createLinearGradient(0, 0, 256, 0);
+    // Black at the edge (x = 0), easing out by the band's inner rim.
+    for (let i = 0; i <= 8; i++) {
+      const t = i / 8;
+      g.addColorStop(t, `rgba(0,0,0,${((1 - t) * (1 - t)).toFixed(3)})`);
+    }
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 256, 1);
+    const tex = PIXI.Texture.from(c);
+    tex.source.scaleMode = 'linear';
+    return tex;
+  })();
+  const edgeBands = [0, 1, 2, 3].map(() => {
+    const sprite = new PIXI.Sprite(edgeTex);
+    edgeFrame.addChild(sprite);
+    return sprite;
+  });
+  function layEdgeFrame() {
+    const v = edge.vis, fade = proj.edge.fade;
+    edgeFrame.visible = fade > 0;
+    if (fade <= 0) return;
+    const w = v.x1 - v.x0, h = v.y1 - v.y0;
+    const [L, R, T, B] = edgeBands;
+    L.rotation = 0; L.position.set(v.x0, v.y0); L.width = fade; L.height = h;
+    R.rotation = Math.PI; R.position.set(v.x1, v.y1); R.width = fade; R.height = h;
+    T.rotation = Math.PI / 2; T.position.set(v.x1, v.y0); T.width = fade; T.height = w;
+    B.rotation = -Math.PI / 2; B.position.set(v.x0, v.y1); B.width = fade; B.height = w;
+  }
+  function relockBlooms() {
+    const m = proj.edge.margin, v = edge.vis;
+    let n = 0;
+    for (const inst of rcInstances) {
+      const bx0 = inst.sprite.x, by0 = inst.sprite.y;
+      const bx1 = bx0 + inst.f.w, by1 = by0 + inst.f.h;
+      const d = Math.min(bx0 - v.x0, v.x1 - bx1, by0 - v.y0, v.y1 - by1);
+      inst.edgeLocked = d < m;
+      n += inst.edgeLocked ? 1 : 0;
+    }
+    edge.locked = n;
+  }
+  // The canvas corners in world units (the world transform inverted by
+  // hand - no render needed), boxed (the trim's rotation is a fraction
+  // of a degree), clipped to the wall. Called by fit().
+  function syncEdge() {
+    if (!edgeReady) return;
+    const sc = world.scale.x || 1, rot = -world.rotation;
+    const cos = Math.cos(rot), sin = Math.sin(rot);
+    const local = (x, y) => {
+      const dx = (x - world.position.x) / sc, dy = (y - world.position.y) / sc;
+      return [world.pivot.x + dx * cos - dy * sin, world.pivot.y + dx * sin + dy * cos];
+    };
+    const W = app.screen.width, H = app.screen.height;
+    const pts = [local(0, 0), local(W, 0), local(W, H), local(0, H)];
+    const v = edge.vis;
+    v.x0 = Math.max(0, Math.min(...pts.map((q) => q[0])));
+    v.y0 = Math.max(0, Math.min(...pts.map((q) => q[1])));
+    v.x1 = Math.min(WALL, Math.max(...pts.map((q) => q[0])));
+    v.y1 = Math.min(WALL, Math.max(...pts.map((q) => q[1])));
+    edge.stamp++;
+    relockBlooms();
+    layEdgeFrame();
+  }
+  function setEdge(p) {
+    const e = proj.edge;
+    if (Number.isFinite(p.margin)) e.margin = Math.max(0, Math.min(240, p.margin));
+    if (Number.isFinite(p.fade)) e.fade = Math.max(0, Math.min(320, p.fade));
+    if (Number.isFinite(p.drag)) e.drag = Math.max(0, Math.min(1, p.drag));
+    edge.stamp++;
+    relockBlooms();
+    layEdgeFrame();
+    syncVenuePanel();
+  }
+  edgeReady = true;
+  syncEdge();
 
   // ---- the depth camera ------------------------------------------------
   // tools/depthcam.py watches the wall through the Gemini 2 and streams
@@ -8521,7 +8632,8 @@ fn mainFragment(
   function calRecord() {
     return { v: 1, on: proj.on, corners: proj.corners, trim: proj.trim,
              light: proj.light,
-             repeats: proj.repeats, fit: proj.fit, render: proj.render };
+             repeats: proj.repeats, fit: proj.fit, render: proj.render,
+             edge: { margin: proj.edge.margin, fade: proj.edge.fade, drag: proj.edge.drag } };
   }
   function calWrite() {
     try {
@@ -8763,6 +8875,7 @@ fn mainFragment(
     if (Number.isFinite(p.repeats)) {
       proj.repeats = Math.max(1, Math.min(6, Math.round(p.repeats)));
     }
+    if (p.edge && typeof p.edge === 'object') setEdge(p.edge);
     syncVenuePanel();
   }
   function syncVenuePanel() {
@@ -8773,6 +8886,14 @@ fn mainFragment(
     if (rep && document.activeElement !== rep) rep.value = proj.repeats;
     if (fitEl) fitEl.value = proj.fit;
     if (ren && document.activeElement !== ren) ren.value = proj.render;
+    const dial = (id, v, digits) => {
+      const el = document.getElementById(id), out = document.getElementById(id + 'out');
+      if (el && document.activeElement !== el) el.value = v;
+      if (out) out.textContent = digits ? v.toFixed(digits) : String(Math.round(v));
+    };
+    dial('edgemargin', proj.edge.margin);
+    dial('edgefade', proj.edge.fade);
+    dial('edgedrag', proj.edge.drag, 2);
     if (note) {
       const dpr = window.devicePixelRatio || 1;
       note.textContent = (proj.repeats !== GRID
@@ -8943,6 +9064,13 @@ fn mainFragment(
     });
     change('venuefit', (e) => { setFit(e.target.value); calTouched(); });
     change('venuerender', (e) => { setRender(Number(e.target.value)); calTouched(); });
+    const slide = (id, fn) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('input', (e) => fn(Number(e.target.value)));
+    };
+    slide('edgemargin', (v) => { setEdge({ margin: v }); calTouched(); });
+    slide('edgefade', (v) => { setEdge({ fade: v }); calTouched(); });
+    slide('edgedrag', (v) => { setEdge({ drag: v }); calTouched(); });
     syncVenuePanel();
     on('projpop', () => {
       window.open(`${location.href.split('#')[0]}#OPERATOR`, 'wallOperator',
@@ -8962,7 +9090,8 @@ fn mainFragment(
     on('calcopy', () => {
       const packed = b64urlEncode(JSON.stringify(
         { v: 1, corners: proj.corners, trim: proj.trim,
-          repeats: proj.repeats, fit: proj.fit, render: proj.render }));
+          repeats: proj.repeats, fit: proj.fit, render: proj.render,
+          edge: { margin: proj.edge.margin, fade: proj.edge.fade, drag: proj.edge.drag } }));
       (navigator.clipboard?.writeText(packed) || Promise.reject())
         .catch(() => window.prompt('calibration:', packed));
     });
