@@ -4606,17 +4606,25 @@ fn mainFragment(
     return Math.max(LIGHT_RES_MIN, Math.min(LIGHT_RES_MAX, Math.ceil(px / 256) * 256));
   }
   lightRes = lightResFor(fitScale());
-  const lightTex = PIXI.RenderTexture.create({ width: lightRes, height: lightRes });
+  let lightTex = PIXI.RenderTexture.create({ width: lightRes, height: lightRes });
   lightScene.scale.set(lightRes / WALL);
   const lightSprite = new PIXI.Sprite(lightTex);
   lightSprite.width = WALL; lightSprite.height = WALL;
+  // The field is REPLACED on a density change, never resized: a resized
+  // render texture kept its old GL rectangle (the light landed in the
+  // top-left of the wall, the rest multiplied by nothing and showed the
+  // raw print - Kevin's "border of the wallpaper missing all the
+  // effects" on Project, which resizes for fullscreen).
   sizeLightField = (s0) => {
     const r = lightResFor(s0);
     if (r === lightRes) return;
     lightRes = r;
-    lightTex.resize(r, r);
+    const old = lightTex;
+    lightTex = PIXI.RenderTexture.create({ width: r, height: r });
     lightScene.scale.set(r / WALL);
+    lightSprite.texture = lightTex;
     lightSprite.width = WALL; lightSprite.height = WALL;
+    old.destroy(true);
   };
   // Debug view: '&light' in the hash shows the raw light field itself.
   lightSprite.blendMode = location.hash.includes('RAWLIGHT') ? 'normal' : 'multiply';
@@ -5972,6 +5980,9 @@ fn mainFragment(
                          canvas: [app.canvas.width, app.canvas.height],
                          screen: [app.screen.width, app.screen.height],
                          scale: world.scale.x,
+                         light: [lightSprite.width, lightSprite.height, lightTex.width, lightTex.height,
+                                 lightTex.source.pixelWidth, lightScene.scale.x, lightSprite.texture.orig.width],
+                         tiles: [tileBase[0].width, tileBase[0].height, tileBase[8] ? tileBase[8].x + tileBase[8].width : -1],
                        }),
                        season: () => ({ current: season.current, target: season.target,
                                         pending: season.pending, baked: Object.keys(tileSeason),
