@@ -350,7 +350,10 @@
       <div class="row2">
         <button id="calcam">Camera</button>
         <button id="calsnap">Snap</button>
-        <button id="calreset">Reset</button></div>
+        <button id="calreset">Reset all</button></div>
+      <div class="row2">
+        <button id="calresetwarp">Reset warp</button>
+        <button id="calresettrim">Reset trim</button></div>
       <div class="row2">
         <button id="calcopy">Copy cal</button>
         <button id="calpaste">Paste cal</button>
@@ -360,7 +363,9 @@
         Shift+wheel: tile width. Shift+Alt+wheel: tile height.
         Tab cycles corners, arrows nudge (Shift 10, Alt &frac14;).
         Esc closes calibrate, Esc again stops projecting.
-        Zero the projector's own keystone first.</div>
+        Zero the projector's own keystone first.
+        <b>Camera</b> solves the warp for you: mark the projected
+        crosshairs, mark the wall's own corners, then Fit corners.</div>
     </div>
     <div id="campanel"></div>
     <div id="fspill">click for fullscreen</div>
@@ -780,6 +785,7 @@
     <div class="oprow">
       <button id="openter">Project</button>
       <button id="opexit">Exit</button>
+      <button id="oplight">Light only</button>
       <span class="camstatus" id="oplink">connecting&hellip;</span>
     </div>
   </div>
@@ -798,6 +804,7 @@
       <button id="opup">&uarr;</button>
       <button id="opdown">&darr;</button>
       <button id="opright">&rarr;</button>
+      <button id="opresetwarp">Reset warp</button>
     </div>
   </div>
   <div class="opgroup">
@@ -818,7 +825,6 @@
       <button id="opgrid">Grid</button>
       <button id="opflood">White</button>
       <button id="opblink">Blink</button>
-      <button id="oplight">Light</button>
       <button id="opsnap">Snap</button>
     </div>
   </div>
@@ -9184,6 +9190,25 @@ fn mainFragment(
         + `(display \u00d7${dpr.toFixed(2)}), light ${lightRes}`;
     }
   }
+  // The corner quad, set wholesale: the camera's fit lands here, and so
+  // does the operator window's. Anything past the guard rail is a bad
+  // solve (marks clicked out of order, say) — refused rather than
+  // applied, because a wild quad is exactly what can't be dragged back.
+  function applyCorners(next) {
+    if (!Array.isArray(next) || next.length !== 4) return false;
+    const sane = next.every((p) => Array.isArray(p) && p.length === 2
+      && p.every((v) => Number.isFinite(v) && v > -3 && v < 4));
+    if (!sane) return false;
+    proj.corners = next.map((p) => [p[0], p[1]]);
+    applyWarp();
+    calTouched();
+    return true;
+  }
+  function resetWarp() {
+    proj.corners = defaultCorners();
+    applyWarp();
+    calTouched();
+  }
   function applySnapResult(r) {
     proj.trim.dx = r.dx;
     proj.trim.dy = r.dy;
@@ -9313,6 +9338,8 @@ fn mainFragment(
         calSave();
         syncCalPanel();
       } else if (msg.type === 'corner') nudgeCorner(msg.idx, msg.dx, msg.dy);
+      else if (msg.type === 'corners') applyCorners(msg.corners);
+      else if (msg.type === 'resetwarp') resetWarp();
       else if (msg.type === 'flags') setFlags(msg);
       else if (msg.type === 'snapApply') applySnapResult(msg);
       else if (msg.type === 'enter') enterProjection(false);
@@ -9368,6 +9395,15 @@ fn mainFragment(
       applyWarp();
       calTouched();
     });
+    // The two halves of the calibration undo separately: a warp dragged
+    // into a knot no longer costs you the print alignment, and vice
+    // versa. Resetting everything at once was the only way out before.
+    on('calresetwarp', () => resetWarp());
+    on('calresettrim', () => {
+      proj.trim = { dx: 0, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1 };
+      fit();
+      calTouched();
+    });
     on('calexit', () => exitProjection());
     on('calcopy', () => {
       const packed = b64urlEncode(JSON.stringify(
@@ -9421,6 +9457,8 @@ fn mainFragment(
         tilePx: TILE,
         getTile: () => tileRaster256(),
         getTrim: () => proj.trim,
+        getCorners: () => (ensureCorners(), proj.corners),
+        onCorners: (c) => applyCorners(c),
         setFlood: (v) => setFlags({ flood: v }),
         onSnap: (r) => applySnapResult(r),
       });
@@ -9477,9 +9515,13 @@ fn mainFragment(
     fileLab.appendChild(fileIn);
     const btnMark = document.createElement('button');
     btnMark.textContent = 'Mark corners';
+    const btnWall = document.createElement('button');
+    btnWall.textContent = 'Mark wall';
+    const btnFit = document.createElement('button');
+    btnFit.textContent = 'Fit corners';
     const btnSnap = document.createElement('button');
     btnSnap.textContent = 'Snap';
-    row1.append(btnCam, fileLab, btnMark, btnSnap);
+    row1.append(btnCam, fileLab, btnMark, btnWall, btnFit, btnSnap);
     const row2 = document.createElement('div');
     row2.className = 'camrow';
     const ghostLab = document.createElement('span');
@@ -9498,9 +9540,12 @@ fn mainFragment(
     const MARK_COLORS = ['#ff6b8a', '#9fd9a3', '#7db8ff', '#ffc36b'];
     const MARK_NAMES = ['ROSE top-left', 'SAGE top-right',
       'BLUE bottom-right', 'AMBER bottom-left'];
+    const WALL_NAMES = ['top-left', 'top-right',
+      'bottom-right', 'bottom-left'];
     const st = {
       video: null, stream: null, still: null,
       zoom: 1, ox: 0, oy: 0, marks: [], marking: -1, Hcam: null,
+      wallMarks: [], wallMarking: -1,
       wipeX: 0.55, raf: 0, lastKey: '', ghostAt: 0,
     };
     function say(t) { status.textContent = t; }
@@ -9603,6 +9648,29 @@ fn mainFragment(
         ctx.lineTo(vx, vy + 12);
         ctx.stroke();
       });
+      // The wall's own corners: dashed boxes, joined into the target
+      // quad, so they never read as the projection's round crosshairs.
+      if (st.wallMarks.some(Boolean)) {
+        const pts = st.wallMarks.map((m) => m
+          && [m[0] * st.zoom + st.ox, m[1] * st.zoom + st.oy]);
+        ctx.save();
+        ctx.setLineDash([5, 4]);
+        ctx.lineWidth = 1.5;
+        if (pts.every(Boolean)) {
+          ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+          ctx.beginPath();
+          ctx.moveTo(pts[0][0], pts[0][1]);
+          for (const p of pts.slice(1)) ctx.lineTo(p[0], p[1]);
+          ctx.closePath();
+          ctx.stroke();
+        }
+        pts.forEach((p, i) => {
+          if (!p) return;
+          ctx.strokeStyle = MARK_COLORS[i];
+          ctx.strokeRect(p[0] - 9, p[1] - 9, 18, 18);
+        });
+        ctx.restore();
+      }
       maybeGhost();
       st.raf = requestAnimationFrame(drawFrame);
     }
@@ -9643,6 +9711,44 @@ fn mainFragment(
       };
       if (st.video.videoWidth) ready();
       else st.video.addEventListener('loadedmetadata', ready, { once: true });
+    }
+    // Auto corner-fit. The camera has already been told two things it
+    // can see: where the PROJECTION's corners land (the crosshair marks
+    // behind Hcam) and where the WALL's own corners are. Both live in
+    // camera pixels, and one homography carries screen -> camera:
+    //   P = Hcam . Hc^-1      (Hc: unit square -> the current quad)
+    // so the screen point that lands on any wall corner is just
+    //   c' = Hc(Hcam^-1(w)).
+    // That is the whole correction, exactly, in one shot - no search,
+    // no iteration, no dragging. It is only as true as the marks and
+    // the pinhole assumption, so the result is still a starting quad
+    // to nudge, not gospel; heavy lens barrel distortion will leave a
+    // residual the 8 DoF warp cannot absorb.
+    function fitCorners() {
+      if (!st.Hcam) { say('Mark corners (the projected crosshairs) first'); return; }
+      if (st.wallMarks.length !== 4 || !st.wallMarks.every(Boolean)) {
+        say('Mark wall — click the wall’s own 4 corners first');
+        return;
+      }
+      const cur = api.getCorners && api.getCorners();
+      if (!Array.isArray(cur) || cur.length !== 4) {
+        say('no corner quad yet — Project first');
+        return;
+      }
+      const Hc = ArtLib.homographyFromCorners(cur.map((c) => [c[0], c[1]]));
+      const Hinv = ArtLib.invert3x3(st.Hcam);
+      if (!Hc || !Hinv) { say('degenerate marks — remark the corners'); return; }
+      const out = st.wallMarks.map((w) =>
+        ArtLib.apply(Hc, ArtLib.apply(Hinv, w)));
+      if (!out.every((p) => p.every((v) => Number.isFinite(v)))) {
+        say('solve failed — check the mark order (TL, TR, BR, BL)');
+        return;
+      }
+      if (!api.onCorners(out)) {
+        say('solve landed off-screen — remark, or Reset warp and retry');
+        return;
+      }
+      say('corners fitted — Snap next to land the print');
     }
     async function snap() {
       if (!st.Hcam) { say('mark the 4 corners first'); return; }
@@ -9711,19 +9817,39 @@ fn mainFragment(
         }
         return;
       }
+      if (st.wallMarking >= 0) {
+        st.wallMarks[st.wallMarking] = toCam(vx, vy);
+        st.wallMarking += 1;
+        if (st.wallMarking >= 4) {
+          st.wallMarking = -1;
+          say('wall marked — Fit corners');
+        } else {
+          say(`click the wall’s ${WALL_NAMES[st.wallMarking]} corner`);
+        }
+        return;
+      }
+      // Either set of marks can be nudged after the fact; the wall's own
+      // corners hit-test second so an overlapping pair favours the
+      // crosshair, which is the finer target of the two.
       let hit = -1;
-      st.marks.forEach((m, i) => {
-        if (!m) return;
+      let hitArr = st.marks;
+      const near = (m) => {
         const hx = m[0] * st.zoom + st.ox - vx;
         const hy = m[1] * st.zoom + st.oy - vy;
-        if (hx * hx + hy * hy < 196) hit = i;
-      });
+        return hx * hx + hy * hy < 196;
+      };
+      st.marks.forEach((m, i) => { if (m && near(m)) { hit = i; hitArr = st.marks; } });
+      if (hit < 0) {
+        st.wallMarks.forEach((m, i) => {
+          if (m && near(m)) { hit = i; hitArr = st.wallMarks; }
+        });
+      }
       view.setPointerCapture(e.pointerId);
       let last = [vx, vy];
       const move = (ev) => {
         const nx = ev.clientX - rect.left;
         const ny = ev.clientY - rect.top;
-        if (hit >= 0) st.marks[hit] = toCam(nx, ny);
+        if (hit >= 0) hitArr[hit] = toCam(nx, ny);
         else {
           st.ox += nx - last[0];
           st.oy += ny - last[1];
@@ -9734,7 +9860,7 @@ fn mainFragment(
       const up = () => {
         view.removeEventListener('pointermove', move);
         view.removeEventListener('pointerup', up);
-        if (hit >= 0) updateH();
+        if (hit >= 0 && hitArr === st.marks) updateH();
       };
       view.addEventListener('pointermove', move);
       view.addEventListener('pointerup', up);
@@ -9770,14 +9896,24 @@ fn mainFragment(
     btnMark.addEventListener('click', () => {
       st.marks = [];
       st.marking = 0;
+      st.wallMarking = -1;
       say(`click the ${MARK_NAMES[0]} crosshair`);
     });
+    btnWall.addEventListener('click', () => {
+      st.wallMarks = [];
+      st.wallMarking = 0;
+      st.marking = -1;
+      say(`click the wall’s ${WALL_NAMES[0]} corner`);
+    });
+    btnFit.addEventListener('click', fitCorners);
     btnSnap.addEventListener('click', snap);
     alphaIn.addEventListener('input', () => {
       ghost.style.opacity = alphaIn.value;
     });
     ghost.style.opacity = alphaIn.value;
-    say('Start camera (or load a Photo), then Mark corners.');
+    say('Start camera (or Photo). Mark corners = the projected '
+      + 'crosshairs; Mark wall = the wall itself; Fit corners solves '
+      + 'the warp; Snap lands the print.');
     drawFrame();
     return {
       snap,
@@ -9800,6 +9936,7 @@ fn mainFragment(
     const state = {
       trim: { dx: 0, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1 },
       grid: false, flood: false, blink: false, light: false, on: false,
+      corners: null,                   // mirrored so the rig can fit them
       recolor: null,
     };
     let linked = false;
@@ -9836,6 +9973,7 @@ fn mainFragment(
         Object.assign(state, {
           trim: m.trim, grid: m.grid, flood: m.flood,
           blink: m.blink, light: m.light, on: m.on, recolor: m.recolor || null,
+          corners: Array.isArray(m.corners) ? m.corners : state.corners,
         });
         linked = true;
         link.textContent = 'linked to the wall';
@@ -9868,6 +10006,8 @@ fn mainFragment(
     const stepv = () => Number($id('opstep').value) || 1;
     const nudge = (dx, dy) =>
       bus.postMessage({ type: 'corner', idx: active, dx, dy });
+    $id('opresetwarp').addEventListener('click',
+      () => bus.postMessage({ type: 'resetwarp' }));
     $id('opleft').addEventListener('click', () => nudge(-stepv(), 0));
     $id('opright').addEventListener('click', () => nudge(stepv(), 0));
     $id('opup').addEventListener('click', () => nudge(0, -stepv()));
@@ -9900,6 +10040,15 @@ fn mainFragment(
       tilePx: TILE,
       getTile: () => opTile,
       getTrim: () => state.trim,
+      getCorners: () => state.corners,
+      onCorners: (c) => {
+        // The wall owns the guard rail; the operator only forwards and
+        // optimistically reflects, and the state echo corrects it if
+        // the wall refused.
+        state.corners = c;
+        bus.postMessage({ type: 'corners', corners: c });
+        return true;
+      },
       setFlood: (v) => bus.postMessage({ type: 'flags', flood: v }),
       onSnap: (r) => bus.postMessage({ type: 'snapApply', ...r }),
     });
