@@ -3293,9 +3293,11 @@ fn mainFragment(
     H: null,                           // wall-unit -> wrap-px homography
     frame: null,                       // wall letterbox inside the canvas
     active: 0, grid: false, flood: false, blink: false, light: false,
+    floodLevel: 1,                     // snap illuminant, 0.1-1 of white
     repeats: VENUE.repeats, fit: VENUE.fit, render: VENUE.render,
     edge: VENUE.edge,                  // { margin, fade, drag } world px / 0-1
   };
+  let camRigRef = () => null;          // set once the panel is wired
   let calRef = null;                   // trim-INdependent overlay
   let calGrid = null;                  // trim-following tile grid
   let floodRect = null;
@@ -8898,7 +8900,7 @@ fn mainFragment(
   let calSaveTimer = 0;
   function calRecord() {
     return { v: 1, on: proj.on, corners: proj.corners, trim: proj.trim,
-             light: proj.light,
+             light: proj.light, floodLevel: proj.floodLevel,
              repeats: proj.repeats, fit: proj.fit, render: proj.render,
              edge: { margin: proj.edge.margin, fade: proj.edge.fade, drag: proj.edge.drag } };
   }
@@ -8944,6 +8946,9 @@ fn mainFragment(
       proj.trim = { dx: 0, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1, ...p.trim };
     }
     proj.light = p.light === true;
+    if (Number.isFinite(p.floodLevel)) {
+      proj.floodLevel = Math.max(0.05, Math.min(1, p.floodLevel));
+    }
     applyLightOnly();
     fit();
     // Fullscreen needs a user gesture; the pill offers it.
@@ -9013,6 +9018,13 @@ fn mainFragment(
     if (calRef) {
       calRef.visible = proj.cal || proj.flood;
       floodRect.visible = proj.flood;
+      // The flood is the snap's ILLUMINANT, and a camera pointed at a
+      // white wall clips long before the print's detail survives. Tint
+      // it grey and the whole exposure comes down without touching a
+      // camera that may expose no controls at all.
+      const lv = Math.max(0.05, Math.min(1, proj.floodLevel || 1));
+      const g = Math.round(lv * 255);
+      floodRect.tint = (g << 16) | (g << 8) | g;
       // Pure white for the snap exposure: the crosshairs would
       // correlate as false print features.
       refMarks.visible = proj.cal && !proj.flood;
@@ -9103,7 +9115,15 @@ fn mainFragment(
     proj.cal = on;
     if (on && !proj.on) enterProjection();
     document.body.classList.toggle('calibrating', on);
-    if (!on) trimDrag = null;
+    if (!on) {
+      trimDrag = null;
+      // Calibrate is over: the camera has no business still running
+      // during the show, whatever state the panel was left in.
+      const rig = camRigRef();
+      if (rig) rig.stopFeed();
+      const panel = document.getElementById('campanel');
+      if (panel) panel.classList.remove('open');
+    }
     syncOverlays();
     positionHandles();
     syncCalPanel();
@@ -9220,6 +9240,10 @@ fn mainFragment(
     if (typeof msg.grid === 'boolean') proj.grid = msg.grid;
     if (typeof msg.flood === 'boolean') proj.flood = msg.flood;
     if (typeof msg.blink === 'boolean') proj.blink = msg.blink;
+    if (Number.isFinite(msg.floodLevel)) {
+      proj.floodLevel = Math.max(0.05, Math.min(1, msg.floodLevel));
+      calSave();
+    }
     if (typeof msg.light === 'boolean') {
       proj.light = msg.light;
       applyLightOnly();
@@ -9316,6 +9340,7 @@ fn mainFragment(
       type: 'state', corners: proj.corners, trim: proj.trim,
       on: proj.on, cal: proj.cal, grid: proj.grid,
       flood: proj.flood, blink: proj.blink, light: proj.light,
+      floodLevel: proj.floodLevel,
       recolor: recolor.state(),
     });
   }
@@ -9459,6 +9484,8 @@ fn mainFragment(
         getTrim: () => proj.trim,
         getCorners: () => (ensureCorners(), proj.corners),
         onCorners: (c) => applyCorners(c),
+        getFloodLevel: () => proj.floodLevel,
+        setFloodLevel: (v) => setFlags({ floodLevel: v }),
         setFlood: (v) => setFlags({ flood: v }),
         onSnap: (r) => applySnapResult(r),
       });
@@ -9466,12 +9493,17 @@ fn mainFragment(
     };
     on('calcam', () => {
       camPanel.classList.toggle('open');
+      // Closing the panel releases the camera. Leaving a phone feed
+      // decoding behind a hidden panel is what was eating the wall's
+      // frame rate, and nothing on screen was admitting to it.
       if (camPanel.classList.contains('open')) ensureRig();
+      else if (rig) rig.stopFeed();
     });
     on('calsnap', () => {
       camPanel.classList.add('open');
       ensureRig().snap();
     });
+    camRigRef = () => rig;
   }
   let _tileRaster = null;
   function tileRaster256() {
@@ -9504,6 +9536,8 @@ fn mainFragment(
     row1.className = 'camrow';
     const btnCam = document.createElement('button');
     btnCam.textContent = 'Start camera';
+    const btnStop = document.createElement('button');
+    btnStop.textContent = 'Stop camera';
     const fileLab = document.createElement('label');
     fileLab.className = 'filebtn';
     fileLab.textContent = 'Photo…';
@@ -9521,7 +9555,7 @@ fn mainFragment(
     btnFit.textContent = 'Fit corners';
     const btnSnap = document.createElement('button');
     btnSnap.textContent = 'Snap';
-    row1.append(btnCam, fileLab, btnMark, btnWall, btnFit, btnSnap);
+    row1.append(btnCam, btnStop, fileLab, btnMark, btnWall, btnFit, btnSnap);
     const row2 = document.createElement('div');
     row2.className = 'camrow';
     const ghostLab = document.createElement('span');
@@ -9532,7 +9566,18 @@ fn mainFragment(
     alphaIn.max = '1';
     alphaIn.step = '0.05';
     alphaIn.value = '0.65';
-    row2.append(ghostLab, alphaIn);
+    // The illuminant, by hand: the ladder finds a level on its own, but a
+    // venue that always blows out is faster to just dial down once.
+    const floodLab = document.createElement('span');
+    floodLab.textContent = 'flood';
+    const floodIn = document.createElement('input');
+    floodIn.type = 'range';
+    floodIn.min = '0.1';
+    floodIn.max = '1';
+    floodIn.step = '0.02';
+    floodIn.value = '1';
+    floodIn.style.width = '86px';
+    row2.append(ghostLab, alphaIn, floodLab, floodIn);
     const status = document.createElement('div');
     status.className = 'camstatus';
     host.append(view, row1, row2, status);
@@ -9546,7 +9591,11 @@ fn mainFragment(
       video: null, stream: null, still: null,
       zoom: 1, ox: 0, oy: 0, marks: [], marking: -1, Hcam: null,
       wallMarks: [], wallMarking: -1,
-      wipeX: 0.55, raf: 0, lastKey: '', ghostAt: 0,
+      wipeX: 0.55, raf: 0, idle: 0, alive: true, lastKey: '', ghostAt: 0,
+      // What the camera will let us control, and where the last
+      // successful snap left the exposure — the next one starts there
+      // rather than blowing out all over again.
+      exp: { track: null, manual: false, key: '', min: 0, max: 0, at: null },
     };
     function say(t) { status.textContent = t; }
     function sizeCanvases() {
@@ -9672,7 +9721,39 @@ fn mainFragment(
         ctx.restore();
       }
       maybeGhost();
-      st.raf = requestAnimationFrame(drawFrame);
+    }
+    // The rig used to hold a requestAnimationFrame loop for the life of
+    // the page — a video decode plus a CPU image warp every frame, still
+    // running behind a closed panel, for the whole show. Now it only
+    // draws while it is actually on screen, and idles at 2.5 Hz when it
+    // isn't (cheap enough to notice being reopened, free enough to
+    // forget about).
+    function awake() {
+      return st.alive && host.offsetParent !== null;
+    }
+    function schedule() {
+      if (!st.alive) return;
+      if (awake()) st.raf = requestAnimationFrame(loop);
+      else st.idle = setTimeout(loop, 400);
+    }
+    function loop() {
+      st.raf = 0;
+      st.idle = 0;
+      if (awake()) drawFrame();
+      schedule();
+    }
+    // Releasing the camera without forgetting the calibration: the
+    // marks and Hcam survive, so Stop/Start does not cost you the
+    // clicking you already did.
+    function stopFeed(quiet) {
+      const had = !!(st.stream || st.video);
+      if (st.stream) st.stream.getTracks().forEach((tr) => tr.stop());
+      st.stream = null;
+      st.video = null;
+      st.exp = { track: null, manual: false, key: '', min: 0, max: 0, at: null };
+      st.lastKey = '';
+      if (had && !quiet) say('camera stopped — the marks are kept');
+      return had;
     }
     function grabFrame() {
       const dims = srcDims();
@@ -9707,7 +9788,11 @@ fn mainFragment(
       await st.video.play().catch(() => {});
       const ready = () => {
         fitSource();
-        say('camera live — Mark corners next');
+        probeExposure();
+        say(st.exp.manual
+          ? `camera live (${st.exp.key} is settable) — Mark corners next`
+          : 'camera live (no exposure control — Snap dims the flood '
+            + 'instead) — Mark corners next');
       };
       if (st.video.videoWidth) ready();
       else st.video.addEventListener('loadedmetadata', ready, { once: true });
@@ -9750,22 +9835,168 @@ fn mainFragment(
       }
       say('corners fitted — Snap next to land the print');
     }
+    // What the camera itself will let us set. Manual exposure is the
+    // honest lever; exposureCompensation is the fallback; plenty of
+    // cameras (most desktop webcams, Safari) offer neither, which is why
+    // the flood level below exists at all.
+    function probeExposure() {
+      const track = st.stream && st.stream.getVideoTracks
+        ? st.stream.getVideoTracks()[0] : null;
+      st.exp = { track: track || null, manual: false, key: '', min: 0, max: 0, at: null };
+      if (!track || !track.getCapabilities) return;
+      let caps = {};
+      try { caps = track.getCapabilities() || {}; } catch (err) { return; }
+      const modes = caps.exposureMode || [];
+      const has = (m) => Array.isArray(modes) ? modes.includes(m) : false;
+      if (has('manual') && caps.exposureTime) {
+        Object.assign(st.exp, { manual: true, key: 'exposureTime',
+          min: caps.exposureTime.min, max: caps.exposureTime.max });
+      } else if (caps.exposureCompensation) {
+        Object.assign(st.exp, { manual: true, key: 'exposureCompensation',
+          min: caps.exposureCompensation.min, max: caps.exposureCompensation.max });
+      }
+    }
+    // frac 0 = as dark as this camera goes, 1 = as bright.
+    async function setCamExposure(frac) {
+      const e = st.exp;
+      if (!e.manual || !e.track) return false;
+      const v = e.min + (e.max - e.min) * Math.max(0, Math.min(1, frac));
+      const one = { [e.key]: v };
+      try {
+        await e.track.applyConstraints({ advanced: [{ exposureMode: 'manual', ...one }] });
+        e.at = frac;
+        return true;
+      } catch (err) { /* some drivers reject the mode but take the value */ }
+      try {
+        await e.track.applyConstraints({ advanced: [one] });
+        e.at = frac;
+        return true;
+      } catch (err) { return false; }
+    }
+    async function releaseCamExposure() {
+      const e = st.exp;
+      if (!e.manual || !e.track || e.at === null) return;
+      try {
+        await e.track.applyConstraints({ advanced: [{ exposureMode: 'continuous' }] });
+        e.at = null;
+      } catch (err) { /* it keeps whatever it had */ }
+    }
+    // How the wall actually came out, sampled only INSIDE the marked
+    // quad — the room around it is irrelevant and usually darker, which
+    // is exactly what fools a whole-frame average.
+    function meterFrame(frame) {
+      if (!st.Hcam) return null;
+      const N = 24;
+      let n = 0, hot = 0, sum = 0, sum2 = 0;
+      for (let i = 0; i < N; i++) {
+        for (let j = 0; j < N; j++) {
+          const p = ArtLib.apply(st.Hcam, [(i + 0.5) / N, (j + 0.5) / N]);
+          const px = Math.round(p[0]);
+          const py = Math.round(p[1]);
+          if (!(px >= 0 && py >= 0 && px < frame.width && py < frame.height)) continue;
+          const k = (py * frame.width + px) * 4;
+          const L = 0.2126 * frame.data[k] + 0.7152 * frame.data[k + 1]
+            + 0.0722 * frame.data[k + 2];
+          if (L >= 250) hot += 1;
+          sum += L;
+          sum2 += L * L;
+          n += 1;
+        }
+      }
+      if (!n) return null;
+      const mean = sum / n;
+      return { clipped: hot / n, mean,
+               rms: Math.sqrt(Math.max(0, sum2 / n - mean * mean)) };
+    }
+    // The exposure walk: darkest-first is wrong (a dim wall has no
+    // contrast either), so it starts where it is and steps DOWN only as
+    // far as it must. The camera's own exposure goes first when it has
+    // one, then the projector's flood, which always works.
+    function exposureLadder() {
+      const steps = [];
+      if (st.exp.manual) {
+        for (const f of [0.45, 0.25, 0.12, 0.05]) {
+          steps.push({ kind: 'cam', v: f,
+                       label: `camera exposure ${Math.round(f * 100)}%` });
+        }
+      }
+      for (const f of [0.6, 0.38, 0.22, 0.12]) {
+        steps.push({ kind: 'flood', v: f,
+                     label: `flood ${Math.round(f * 100)}%` });
+      }
+      return steps;
+    }
     async function snap() {
       if (!st.Hcam) { say('mark the 4 corners first'); return; }
       if (!srcDims()) { say('no camera or photo'); return; }
-      say('flood + capture…');
-      api.setFlood(true);
-      await new Promise((res) => setTimeout(res, 380));
-      const frame = grabFrame();
-      api.setFlood(false);
-      if (!frame) { say('capture failed'); return; }
-      const obs = ArtLib.unwarpToTileSpace(frame, st.Hcam, api.wallSize,
-        [api.wallSize / 2, api.wallSize / 2], 2, api.tilePx, 256);
       const tile = api.getTile();
       if (!tile) { say('tile still decoding — try again'); return; }
-      const r = ArtLib.snapEstimate(obs,
-        { data: tile.data, width: tile.width, height: tile.height });
-      if (!r) { say('no lock — check exposure and marks'); return; }
+      const ref = { data: tile.data, width: tile.width, height: tile.height };
+      probeExposure();
+      const steps = exposureLadder();
+      let r = null;
+      let met = null;
+      let used = st.exp.manual ? 'camera auto' : 'flood 100%';
+      let best = null;
+      api.setFlood(true);
+      try {
+        // Attempt -1 is "as things stand"; each later attempt has
+        // already stepped the exposure down one notch.
+        for (let k = -1; k < steps.length; k++) {
+          if (k >= 0) {
+            const step = steps[k];
+            if (step.kind === 'cam') {
+              if (!await setCamExposure(step.v)) continue;
+            } else if (api.setFloodLevel) {
+              api.setFloodLevel(step.v);
+            } else continue;
+            used = step.label;
+          }
+          say(`capturing — ${used}…`);
+          // A constraint change needs longer to land than a tint swap.
+          await new Promise((res) => setTimeout(res,
+            k >= 0 && steps[k].kind === 'cam' ? 620 : 380));
+          const frame = grabFrame();
+          if (!frame) continue;
+          met = meterFrame(frame);
+          if (met) {
+            best = best && best.clipped <= met.clipped ? best : met;
+            // Blown out: no print detail survives, so don't waste the
+            // correlation — just step down.
+            if (met.clipped > 0.03 && k < steps.length - 1) {
+              say(`too hot (${Math.round(met.clipped * 100)}% clipped) — `
+                + 'stepping exposure down…');
+              continue;
+            }
+          }
+          const obs = ArtLib.unwarpToTileSpace(frame, st.Hcam, api.wallSize,
+            [api.wallSize / 2, api.wallSize / 2], 2, api.tilePx, 256);
+          r = ArtLib.snapEstimate(obs, ref);
+          if (r) break;
+          if (k < steps.length - 1) {
+            say(`no lock at ${used} — stepping exposure down…`);
+          }
+        }
+      } finally {
+        api.setFlood(false);
+      }
+      if (!r) {
+        // Leaving a camera locked dark would blind the preview it just
+        // failed on, so hand exposure back before reporting.
+        await releaseCamExposure();
+        const m = met || best;
+        const detail = m
+          ? ` — wall read ${Math.round(m.mean)}/255, `
+            + `${Math.round(m.clipped * 100)}% clipped, detail ${m.rms.toFixed(1)}`
+          : '';
+        say(m && m.clipped > 0.03
+          ? `still clipping after ${steps.length} steps${detail}. `
+            + 'Stop the room lights down, or drop the projector’s own brightness.'
+          : `no lock${detail}. Exposure looks usable, so check the mark `
+            + 'order (TL, TR, BR, BL) and that the marks sit on the '
+            + 'projected crosshairs.');
+        return;
+      }
       // Observed px -> wall px; the estimate is the ABSOLUTE trim, and
       // translation folds by the tile period to the branch nearest the
       // current trim (periodicity makes them all true — the nearest one
@@ -9784,7 +10015,13 @@ fn mainFragment(
         scale: r.scale,
         score: r.score,
       });
-      say(`locked — score ${r.score.toFixed(2)}; press again to refine`);
+      // The winning exposure is KEPT, camera lock included: it is the one
+      // setting known to work on this wall, and a re-snap should start
+      // from it instead of blowing out again.
+      say(`locked — score ${r.score.toFixed(2)} at ${used}`
+        + (met ? `, ${Math.round(met.clipped * 100)}% clipped` : '')
+        + '; press again to refine');
+      if (api.setFloodLevel) syncFloodIn();
     }
     wipe.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
@@ -9910,16 +10147,38 @@ fn mainFragment(
     alphaIn.addEventListener('input', () => {
       ghost.style.opacity = alphaIn.value;
     });
+    // The slider and the ladder write to the same place, so each shows
+    // what the other did.
+    function syncFloodIn() {
+      const lv = api.getFloodLevel && api.getFloodLevel();
+      if (Number.isFinite(lv) && document.activeElement !== floodIn) {
+        floodIn.value = String(Math.max(0.1, Math.min(1, lv)));
+      }
+    }
+    floodIn.addEventListener('input', () => {
+      if (api.setFloodLevel) api.setFloodLevel(Number(floodIn.value));
+    });
+    syncFloodIn();
+    btnStop.addEventListener('click', () => {
+      if (!stopFeed()) say('camera already stopped');
+    });
     ghost.style.opacity = alphaIn.value;
     say('Start camera (or Photo). Mark corners = the projected '
       + 'crosshairs; Mark wall = the wall itself; Fit corners solves '
       + 'the warp; Snap lands the print.');
-    drawFrame();
+    schedule();
     return {
       snap,
+      syncFlood: syncFloodIn,
+      stopFeed: () => stopFeed(true),
+      live: () => !!(st.stream || st.video),
       stop() {
-        cancelAnimationFrame(st.raf);
-        if (st.stream) st.stream.getTracks().forEach((tr) => tr.stop());
+        st.alive = false;
+        if (st.raf) cancelAnimationFrame(st.raf);
+        if (st.idle) clearTimeout(st.idle);
+        st.raf = 0;
+        st.idle = 0;
+        stopFeed(true);
       },
     };
   }
@@ -9937,10 +10196,12 @@ fn mainFragment(
       trim: { dx: 0, dy: 0, scale: 1, rot: 0, sx: 1, sy: 1 },
       grid: false, flood: false, blink: false, light: false, on: false,
       corners: null,                   // mirrored so the rig can fit them
+      floodLevel: 1,                   // mirrored so the rig can meter
       recolor: null,
     };
     let linked = false;
     let active = 0;
+    let rigRef = null;                 // set once the camera rig exists
     function reflect() {
       const set = (id, v) => {
         const el = $id(id);
@@ -9956,6 +10217,7 @@ fn mainFragment(
       $id('opflood').classList.toggle('on', state.flood);
       $id('opblink').classList.toggle('on', state.blink);
       $id('oplight').classList.toggle('on', state.light);
+      if (rigRef) rigRef.syncFlood();
       $id('openter').classList.toggle('on', state.on);
       const rules = (state.recolor && state.recolor.rules) || [];
       $id('oprcnote').textContent = rules.length
@@ -9974,6 +10236,7 @@ fn mainFragment(
           trim: m.trim, grid: m.grid, flood: m.flood,
           blink: m.blink, light: m.light, on: m.on, recolor: m.recolor || null,
           corners: Array.isArray(m.corners) ? m.corners : state.corners,
+          floodLevel: Number.isFinite(m.floodLevel) ? m.floodLevel : state.floodLevel,
         });
         linked = true;
         link.textContent = 'linked to the wall';
@@ -10041,6 +10304,11 @@ fn mainFragment(
       getTile: () => opTile,
       getTrim: () => state.trim,
       getCorners: () => state.corners,
+      getFloodLevel: () => state.floodLevel,
+      setFloodLevel: (v) => {
+        state.floodLevel = v;
+        bus.postMessage({ type: 'flags', floodLevel: v });
+      },
       onCorners: (c) => {
         // The wall owns the guard rail; the operator only forwards and
         // optimistically reflects, and the state echo corrects it if
@@ -10052,6 +10320,7 @@ fn mainFragment(
       setFlood: (v) => bus.postMessage({ type: 'flags', flood: v }),
       onSnap: (r) => bus.postMessage({ type: 'snapApply', ...r }),
     });
+    rigRef = rig;
     $id('opsnap').addEventListener('click', () => rig.snap());
     // Recolor from the laptop: the same control plane, over the bus.
     let opTarget = 'white';
